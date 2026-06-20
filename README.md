@@ -1,6 +1,6 @@
 # Quartz
 
-An extraordinarily basic native macOS web browser.
+A native macOS web browser.
 
 ## Run
 

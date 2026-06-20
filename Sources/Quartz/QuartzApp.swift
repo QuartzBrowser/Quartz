@@ -5,6 +5,10 @@ import WebKit
 struct QuartzApp {
     @MainActor
     static func main() {
+        if CommandLine.arguments.contains("--validate-ublock-origin") {
+            UBlockOriginContentBlockerValidator.runAndExit()
+        }
+
         let app = NSApplication.shared
         let delegate = BrowserController()
 
@@ -19,6 +23,9 @@ struct QuartzApp {
 final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSTextFieldDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
+    private var uBlockOriginContentBlocker: UBlockOriginContentBlocker!
+    private var uBlockOriginStatus: UBlockOriginContentBlockerStatus?
+    private var uBlockOriginInstallError: Error?
 
     private let addressField = NSTextField()
     private let backButton = BrowserController.makeIconButton(symbolName: "chevron.left", description: "Back")
@@ -26,13 +33,14 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private let reloadButton = BrowserController.makeIconButton(symbolName: "arrow.clockwise", description: "Reload")
     private let stopButton = BrowserController.makeIconButton(symbolName: "xmark", description: "Stop")
     private let homeButton = BrowserController.makeIconButton(symbolName: "house", description: "Home")
+    private let contentBlockingButton = BrowserController.makeIconButton(symbolName: "shield", description: "uBlock Origin")
 
     private let homeURL = URL(string: "https://www.example.com")!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         buildWindow()
-        load(homeURL)
+        installContentBlockerThenLoadHome()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -42,10 +50,12 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private func buildWindow() {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.userContentController = WKUserContentController()
 
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
+        uBlockOriginContentBlocker = UBlockOriginContentBlocker(userContentController: configuration.userContentController)
 
         addressField.placeholderString = "Search or enter website name"
         addressField.target = self
@@ -64,6 +74,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         configure(button: reloadButton, action: #selector(reload(_:)))
         configure(button: stopButton, action: #selector(stopLoading(_:)))
         configure(button: homeButton, action: #selector(goHome(_:)))
+        configure(button: contentBlockingButton, action: #selector(showContentBlockingStatus(_:)))
+        contentBlockingButton.toolTip = "uBlock Origin \(UBlockOriginContentBlocker.version) is loading"
 
         let toolbar = NSStackView(views: [
             backButton,
@@ -71,6 +83,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
             reloadButton,
             stopButton,
             homeButton,
+            contentBlockingButton,
             addressField,
             goButton
         ])
@@ -142,6 +155,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         homeItem.target = self
         navigationMenu.addItem(homeItem)
 
+        let contentBlockingItem = NSMenuItem(title: "uBlock Origin Status", action: #selector(showContentBlockingStatus(_:)), keyEquivalent: "")
+        contentBlockingItem.target = self
+        navigationMenu.addItem(contentBlockingItem)
+
         navigationMenuItem.submenu = navigationMenu
         mainMenu.addItem(navigationMenuItem)
 
@@ -198,6 +215,61 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
 
     @objc private func goHome(_ sender: Any?) {
         load(homeURL)
+    }
+
+    @objc private func showContentBlockingStatus(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "uBlock Origin \(UBlockOriginContentBlocker.version)"
+
+        if let uBlockOriginStatus {
+            alert.informativeText = """
+            \(uBlockOriginStatus.summary)
+            \(uBlockOriginStatus.blockRuleCount) blocking rules and \(uBlockOriginStatus.exceptionRuleCount) exception rules were adapted from \(uBlockOriginStatus.parsedLineCount) bundled filter lines.
+            """
+        } else if let uBlockOriginInstallError {
+            alert.informativeText = "Content blocking is unavailable: \(uBlockOriginInstallError.localizedDescription)"
+        } else {
+            alert.informativeText = "Content blocking is still being prepared."
+        }
+
+        alert.runModal()
+    }
+
+    private func installContentBlockerThenLoadHome() {
+        addressField.stringValue = "Installing uBlock Origin \(UBlockOriginContentBlocker.version)..."
+        contentBlockingButton.isEnabled = false
+
+        uBlockOriginContentBlocker.install { [weak self] result in
+            guard let self else {
+                return
+            }
+
+            switch result {
+            case .success(let status):
+                self.uBlockOriginStatus = status
+                self.uBlockOriginInstallError = nil
+                self.contentBlockingButton.image = NSImage(
+                    systemSymbolName: "shield.lefthalf.filled",
+                    accessibilityDescription: "uBlock Origin active"
+                )
+                self.contentBlockingButton.toolTip = status.summary
+                self.contentBlockingButton.isEnabled = true
+                print(status.summary)
+
+            case .failure(let error):
+                self.uBlockOriginStatus = nil
+                self.uBlockOriginInstallError = error
+                self.contentBlockingButton.image = NSImage(
+                    systemSymbolName: "shield.slash",
+                    accessibilityDescription: "uBlock Origin unavailable"
+                )
+                self.contentBlockingButton.toolTip = "uBlock Origin unavailable: \(error.localizedDescription)"
+                self.contentBlockingButton.isEnabled = true
+                print("uBlock Origin unavailable: \(error.localizedDescription)")
+            }
+
+            self.load(self.homeURL)
+        }
     }
 
     private func load(_ url: URL) {
@@ -268,6 +340,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private func showLoadError(_ error: Error) {
         let alert = NSAlert(error: error)
         alert.messageText = "Quartz could not load this page."
+        alert.informativeText = error.localizedDescription
+        print("Quartz load error: \(error)")
         alert.runModal()
         updateControls()
     }

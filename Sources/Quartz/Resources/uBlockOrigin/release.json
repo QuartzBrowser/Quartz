@@ -1,0 +1,9 @@
+{
+  "name": "uBlock Origin",
+  "version": "1.71.0",
+  "releaseURL": "https://github.com/gorhill/uBlock/releases/tag/1.71.0",
+  "sourceAsset": "https://github.com/gorhill/uBlock/releases/download/1.71.0/uBlock0_1.71.0.chromium.zip",
+  "sourceAssetSHA256": "5313a13fdbe748c23abdde6d24671635a3711a7ab0cf53f420bfa4aecdc36bf6",
+  "packagedForQuartzOn": "2026-06-20",
+  "license": "GPL-3.0-or-later"
+}

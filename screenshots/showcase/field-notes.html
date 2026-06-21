@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quartz Field Notes</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #182236;
+      --muted: #657287;
+      --paper: #fbfcfd;
+      --line: #dce3ea;
+      --blue: #245fd4;
+      --teal: #188b97;
+      --leaf: #3d8b59;
+      --plum: #8056a8;
+      --amber: #ca8725;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(180deg, #f5f8fb 0%, #fffaf2 100%);
+    }
+
+    .shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 34px 36px 48px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 34px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #22304a;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      background: conic-gradient(from 220deg, #245fd4, #27a7a7, #77a646, #d39129, #ba4f72, #245fd4);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.65), 0 12px 26px rgba(36,95,212,0.20);
+    }
+
+    nav {
+      display: flex;
+      gap: 22px;
+      color: #526176;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(360px, 0.75fr);
+      gap: 34px;
+      align-items: stretch;
+    }
+
+    .article {
+      padding: 34px 38px;
+      border: 1px solid rgba(116,128,148,0.22);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.86);
+      box-shadow: 0 30px 70px rgba(25,35,54,0.12);
+    }
+
+    .kicker {
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 850;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 18px 0 18px;
+      max-width: 760px;
+      font-size: clamp(44px, 6vw, 76px);
+      line-height: 0.98;
+      letter-spacing: 0;
+    }
+
+    .dek {
+      margin: 0;
+      max-width: 700px;
+      color: #44536a;
+      font-size: 22px;
+      line-height: 1.34;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 26px 0 32px;
+    }
+
+    .chip {
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: #eef3fb;
+      color: #38506f;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .illustration {
+      height: 250px;
+      border-radius: 8px;
+      border: 1px solid rgba(116,128,148,0.18);
+      background:
+        linear-gradient(120deg, rgba(36,95,212,0.88), rgba(24,139,151,0.78)),
+        radial-gradient(circle at 22% 28%, rgba(255,255,255,0.36), transparent 18%),
+        radial-gradient(circle at 78% 38%, rgba(255,236,171,0.36), transparent 20%);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .illustration::before,
+    .illustration::after {
+      content: "";
+      position: absolute;
+      inset: 34px;
+      border: 1px solid rgba(255,255,255,0.32);
+      transform: rotate(-7deg);
+    }
+
+    .illustration::after {
+      inset: 72px 60px;
+      border-color: rgba(255,255,255,0.48);
+      transform: rotate(8deg);
+    }
+
+    .body-grid {
+      display: grid;
+      grid-template-columns: 1fr 260px;
+      gap: 34px;
+      margin-top: 32px;
+    }
+
+    article p {
+      margin: 0 0 18px;
+      color: #344359;
+      font-size: 18px;
+      line-height: 1.58;
+    }
+
+    article p:first-child::first-letter {
+      float: left;
+      padding-right: 10px;
+      color: var(--teal);
+      font-size: 58px;
+      line-height: 0.85;
+      font-weight: 850;
+    }
+
+    aside {
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .note {
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid rgba(116,128,148,0.20);
+      background: #ffffff;
+      box-shadow: 0 18px 38px rgba(25,35,54,0.08);
+    }
+
+    .note small {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .note strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+
+    .map {
+      min-height: 100%;
+      padding: 24px;
+      border-radius: 8px;
+      border: 1px solid rgba(116,128,148,0.22);
+      background:
+        linear-gradient(145deg, rgba(255,255,255,0.86), rgba(241,247,250,0.78)),
+        radial-gradient(circle at 36% 22%, rgba(202,135,37,0.20), transparent 22%),
+        radial-gradient(circle at 78% 74%, rgba(128,86,168,0.18), transparent 24%);
+      box-shadow: 0 30px 70px rgba(25,35,54,0.10);
+    }
+
+    .route {
+      height: 100%;
+      min-height: 520px;
+      border-radius: 8px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, transparent 31px, rgba(82,97,118,0.10) 32px),
+        linear-gradient(transparent 31px, rgba(82,97,118,0.10) 32px);
+      background-size: 32px 32px;
+    }
+
+    .route::before {
+      content: "";
+      position: absolute;
+      left: 10%;
+      top: 8%;
+      width: 78%;
+      height: 46%;
+      border: 8px solid transparent;
+      border-top-color: var(--blue);
+      border-right-color: var(--teal);
+      border-bottom-color: var(--amber);
+      border-left-color: var(--leaf);
+      border-radius: 44% 56% 50% 50%;
+      transform: rotate(-13deg);
+    }
+
+    .pin {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 5px solid var(--blue);
+      box-shadow: 0 12px 24px rgba(25,35,54,0.18);
+    }
+
+    .pin.one {
+      left: 22%;
+      top: 14%;
+    }
+
+    .pin.two {
+      right: 18%;
+      top: 30%;
+      border-color: var(--teal);
+    }
+
+    .pin.three {
+      left: 34%;
+      top: 54%;
+      border-color: var(--amber);
+    }
+
+    @media (max-width: 900px) {
+      .shell {
+        padding: 26px 22px 34px;
+      }
+
+      .hero,
+      .body-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .route {
+        min-height: 280px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand"><span class="mark"></span>Quartz Field Notes</div>
+      <nav>
+        <span>Reading</span>
+        <span>Navigation</span>
+        <span>WebKit</span>
+      </nav>
+    </header>
+
+    <main class="hero">
+      <section class="article">
+        <span class="kicker">Browser comfort</span>
+        <h1>A calmer frame for the open web.</h1>
+        <p class="dek">Quartz keeps the browser surface quiet so pages feel spacious, readable, and fast without giving up native controls.</p>
+        <div class="meta">
+          <span class="chip">6 minute read</span>
+          <span class="chip">Native toolbar</span>
+          <span class="chip">WebKit rendering</span>
+        </div>
+        <div class="illustration"></div>
+
+        <div class="body-grid">
+          <article>
+            <p>Quartz starts from a simple idea: the browser should help you move through the web without making itself the loudest thing on screen. The window uses AppKit controls for navigation and lets WebKit do the work it was built to do.</p>
+            <p>The address field accepts full URLs, host names, local files, and plain search text. Back and forward state follows WebKit history, while reload and stop reflect the current page load.</p>
+            <p>For users who rely on extensions, Quartz can load local WebExtension packages on supported macOS versions. That keeps the core app small while leaving room for personal workflows.</p>
+          </article>
+
+          <aside>
+            <div class="note">
+              <small>Window size</small>
+              <strong>Designed to resize</strong>
+            </div>
+            <div class="note">
+              <small>Search</small>
+              <strong>DuckDuckGo fallback</strong>
+            </div>
+            <div class="note">
+              <small>Gestures</small>
+              <strong>Back and forward</strong>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="map" aria-label="Navigation map">
+        <div class="route">
+          <span class="pin one"></span>
+          <span class="pin two"></span>
+          <span class="pin three"></span>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quartz Extensions</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #162033;
+      --muted: #647086;
+      --line: #dce3ea;
+      --paper: #f8fafc;
+      --blue: #255fd3;
+      --teal: #21979d;
+      --green: #3e965f;
+      --amber: #c98a22;
+      --coral: #d95f76;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 16% 18%, rgba(37,95,211,0.13), transparent 24%),
+        radial-gradient(circle at 88% 20%, rgba(217,95,118,0.12), transparent 28%),
+        linear-gradient(135deg, #f8fbff 0%, #f1f7f6 52%, #fff9ee 100%);
+    }
+
+    .page {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 34px 38px 48px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      background: conic-gradient(from 220deg, var(--blue), var(--teal), var(--green), var(--amber), var(--coral), var(--blue));
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.68), 0 12px 26px rgba(37,95,211,0.20);
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 12px;
+      border: 1px solid rgba(62,150,95,0.24);
+      border-radius: 999px;
+      background: rgba(232,248,238,0.78);
+      color: #226342;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .status::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(62,150,95,0.14);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(360px, 0.58fr) minmax(0, 1fr);
+      gap: 28px;
+      align-items: stretch;
+    }
+
+    .intro {
+      padding: 30px 32px;
+      border: 1px solid rgba(116,128,148,0.22);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.82);
+      box-shadow: 0 30px 70px rgba(25,35,54,0.11);
+      min-width: 0;
+    }
+
+    .kicker {
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 850;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 18px 0 18px;
+      font-size: clamp(42px, 5vw, 60px);
+      line-height: 0.96;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      margin: 0;
+      color: #44536a;
+      font-size: 22px;
+      line-height: 1.34;
+    }
+
+    .flow {
+      display: grid;
+      gap: 13px;
+      margin-top: 30px;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 13px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid rgba(116,128,148,0.18);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.72);
+    }
+
+    .number {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: white;
+      background: var(--blue);
+      font-size: 17px;
+      font-weight: 900;
+    }
+
+    .flow-row:nth-child(2) .number {
+      background: var(--teal);
+    }
+
+    .flow-row:nth-child(3) .number {
+      background: var(--amber);
+    }
+
+    .flow-row strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .flow-row span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .dashboard {
+      padding: 20px;
+      border: 1px solid rgba(116,128,148,0.22);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.80);
+      box-shadow: 0 36px 86px rgba(25,35,54,0.15);
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid rgba(116,128,148,0.18);
+      min-width: 0;
+    }
+
+    .toolbar h2 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .toolbar span {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .card {
+      min-height: 180px;
+      padding: 18px;
+      border: 1px solid rgba(116,128,148,0.20);
+      border-radius: 8px;
+      background: #ffffff;
+      box-shadow: 0 18px 38px rgba(25,35,54,0.08);
+      min-width: 0;
+    }
+
+    .card.wide {
+      grid-column: 1 / -1;
+      min-height: 150px;
+      background:
+        linear-gradient(135deg, rgba(37,95,211,0.08), rgba(33,151,157,0.08)),
+        #ffffff;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .icon {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: white;
+      background: var(--blue);
+      font-weight: 900;
+    }
+
+    .card:nth-child(2) .icon {
+      background: var(--green);
+    }
+
+    .card:nth-child(3) .icon {
+      background: var(--coral);
+    }
+
+    .toggle {
+      width: 44px;
+      height: 26px;
+      padding: 3px;
+      border-radius: 999px;
+      background: #dff4e8;
+    }
+
+    .toggle::before {
+      content: "";
+      display: block;
+      width: 20px;
+      height: 20px;
+      margin-left: 18px;
+      border-radius: 999px;
+      background: var(--green);
+      box-shadow: 0 4px 10px rgba(34,99,66,0.20);
+    }
+
+    h3 {
+      margin: 16px 0 6px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.42;
+    }
+
+    .permissions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .permission {
+      padding: 6px 8px;
+      border-radius: 999px;
+      color: #38506f;
+      background: #eef3fb;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .activity {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .tile {
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(116,128,148,0.18);
+      background: rgba(255,255,255,0.74);
+      min-width: 0;
+    }
+
+    .tile small {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .tile b {
+      display: block;
+      margin-top: 7px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    @media (max-width: 940px) {
+      .page {
+        padding: 26px 22px 34px;
+      }
+
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .cards,
+      .activity {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="brand"><span class="mark"></span>Quartz Extensions</div>
+      <div class="status">WebExtensions ready</div>
+    </header>
+
+    <main class="hero">
+      <section class="intro">
+        <span class="kicker">Local extension support</span>
+        <h1>Bring your tools.</h1>
+        <p class="lede">Quartz can install one-file .qrx WebExtension packages on macOS releases that expose WebKit extension support.</p>
+        <div class="flow">
+          <div class="flow-row">
+            <span class="number">1</span>
+            <div><strong>Choose a .qrx package</strong><span>Upload a single Quartz extension file using the native file picker.</span></div>
+          </div>
+          <div class="flow-row">
+            <span class="number">2</span>
+            <div><strong>Grant install-time permissions</strong><span>Requested permissions and match patterns are approved for the loaded context.</span></div>
+          </div>
+          <div class="flow-row">
+            <span class="number">3</span>
+            <div><strong>Restore automatically</strong><span>Quartz stores installed packages in Application Support and reloads them on launch.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard">
+        <div class="toolbar">
+          <div>
+            <h2>Extension shelf</h2>
+            <span>3 local packages available</span>
+          </div>
+          <div class="status">Active</div>
+        </div>
+
+        <div class="cards">
+          <article class="card">
+            <div class="card-head">
+              <span class="icon">Q</span>
+              <span class="toggle"></span>
+            </div>
+            <h3>Quartz Ad Blocker</h3>
+            <p>Blocks distracting resources with a local WebExtension package.</p>
+            <div class="permissions">
+              <span class="permission">tabs</span>
+              <span class="permission">storage</span>
+              <span class="permission">all_urls</span>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card-head">
+              <span class="icon">R</span>
+              <span class="toggle"></span>
+            </div>
+            <h3>Reading Tools</h3>
+            <p>Lightweight helpers for saving pages and keeping long reads clean.</p>
+            <div class="permissions">
+              <span class="permission">activeTab</span>
+              <span class="permission">contextMenus</span>
+            </div>
+          </article>
+
+          <article class="card wide">
+            <div class="card-head">
+              <span class="icon">S</span>
+              <span class="toggle"></span>
+            </div>
+            <h3>Session summary</h3>
+            <p>Extension state is tied to the active WebKit view, so popups, options pages, and tab URLs resolve through Quartz.</p>
+            <div class="activity">
+              <div class="tile"><small>Installed</small><b>3</b></div>
+              <div class="tile"><small>Permission sets</small><b>7</b></div>
+              <div class="tile"><small>Launch restore</small><b>On</b></div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

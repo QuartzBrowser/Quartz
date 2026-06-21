@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quartz - Native macOS browsing</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #162033;
+      --muted: #657187;
+      --line: #d9dee8;
+      --paper: #f8fafc;
+      --blue: #286de8;
+      --cyan: #20a6b8;
+      --green: #38a169;
+      --gold: #d89b25;
+      --rose: #d95f76;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 18% 16%, rgba(40, 109, 232, 0.14), transparent 28%),
+        radial-gradient(circle at 86% 12%, rgba(32, 166, 184, 0.16), transparent 30%),
+        linear-gradient(135deg, #fbfcff 0%, #eef4f8 46%, #fff8ed 100%);
+    }
+
+    .page {
+      min-height: 100vh;
+      padding: 36px clamp(34px, 5vw, 72px) 42px;
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 42px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.55), transparent 42%),
+        conic-gradient(from 210deg, var(--blue), var(--cyan), #76b852, var(--gold), var(--rose), var(--blue));
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.65), 0 12px 30px rgba(40,109,232,0.24);
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      color: #445169;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(420px, 0.95fr);
+      align-items: start;
+      gap: clamp(34px, 5vw, 70px);
+      padding-top: 88px;
+    }
+
+    .eyebrow {
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(72px, 9vw, 128px);
+      line-height: 0.86;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      margin: 28px 0 0;
+      max-width: 680px;
+      color: #344158;
+      font-size: clamp(22px, 2.2vw, 31px);
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 34px;
+    }
+
+    .button {
+      min-height: 44px;
+      padding: 0 18px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 750;
+      text-decoration: none;
+    }
+
+    .primary {
+      color: white;
+      background: #1f5fd5;
+      box-shadow: 0 16px 34px rgba(31, 95, 213, 0.24);
+    }
+
+    .secondary {
+      color: #22304a;
+      background: rgba(255,255,255,0.72);
+      border: 1px solid rgba(120, 132, 156, 0.28);
+    }
+
+    .feature-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 38px;
+      max-width: 760px;
+    }
+
+    .feature {
+      min-height: 128px;
+      padding: 18px;
+      border: 1px solid rgba(120,132,156,0.24);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.68);
+      box-shadow: 0 18px 48px rgba(31,44,70,0.08);
+    }
+
+    .feature strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 16px;
+    }
+
+    .feature span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.38;
+    }
+
+    .console {
+      position: relative;
+      min-height: 620px;
+      padding: 22px;
+      border: 1px solid rgba(113,126,150,0.24);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.74);
+      box-shadow: 0 38px 90px rgba(34, 48, 74, 0.18);
+      overflow: hidden;
+    }
+
+    .console::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(120deg, rgba(40,109,232,0.10), transparent 34%),
+        linear-gradient(320deg, rgba(216,155,37,0.13), transparent 34%);
+      pointer-events: none;
+    }
+
+    .console > * {
+      position: relative;
+    }
+
+    .window-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 18px;
+      border-bottom: 1px solid rgba(120,132,156,0.22);
+      color: #58657a;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .dots {
+      display: flex;
+      gap: 7px;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      background: #ff5f57;
+      box-shadow: 18px 0 #ffbd2e, 36px 0 #28c840;
+    }
+
+    .glass {
+      margin-top: 20px;
+      padding: 20px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.72);
+      border: 1px solid rgba(120,132,156,0.18);
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .metric {
+      padding: 16px;
+      border-radius: 8px;
+      background: #ffffff;
+      border: 1px solid rgba(120,132,156,0.20);
+    }
+
+    .metric small {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .metric b {
+      display: block;
+      margin-top: 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+
+    .timeline {
+      margin-top: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      align-items: center;
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid rgba(120,132,156,0.18);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.66);
+    }
+
+    .step-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 900;
+      background: #1f5fd5;
+    }
+
+    .step:nth-child(2) .step-icon {
+      background: var(--green);
+    }
+
+    .step:nth-child(3) .step-icon {
+      background: var(--rose);
+    }
+
+    .step strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .step span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pill {
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: #1b5f3a;
+      background: #ddf5e8;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    @media (max-width: 900px) {
+      .page {
+        padding: 28px 22px 34px;
+      }
+
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .console {
+        min-height: 520px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="brand"><span class="mark"></span>Quartz</div>
+      <nav>
+        <span>WebKit</span>
+        <span>Extensions</span>
+        <span>Native macOS</span>
+      </nav>
+    </header>
+
+    <main>
+      <section>
+        <div class="eyebrow">A focused browser for macOS</div>
+        <h1>Quartz</h1>
+        <p class="lede">A native WebKit browser with clean controls, local extension support, and a calm frame for the web you actually use.</p>
+        <div class="actions">
+          <a class="button primary" href="field-notes.html">Browse field notes</a>
+          <a class="button secondary" href="extensions.html">View extensions</a>
+        </div>
+
+        <div class="feature-row">
+          <div class="feature">
+            <strong>Native controls</strong>
+            <span>Back, forward, reload, stop, home, and search live in AppKit.</span>
+          </div>
+          <div class="feature">
+            <strong>WebKit core</strong>
+            <span>Quartz uses the platform browser engine already tuned for macOS.</span>
+          </div>
+          <div class="feature">
+            <strong>WebExtensions</strong>
+            <span>Install one-file .qrx extension packages on supported macOS releases.</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="console" aria-label="Quartz browser dashboard">
+        <div class="window-strip">
+          <span class="dots"><span class="dot"></span></span>
+          <span>quartz.localhost</span>
+        </div>
+
+        <div class="glass">
+          <div class="eyebrow">Current session</div>
+          <div class="metric-grid">
+            <div class="metric">
+              <small>Engine</small>
+              <b>WebKit</b>
+            </div>
+            <div class="metric">
+              <small>Mode</small>
+              <b>Native</b>
+            </div>
+            <div class="metric">
+              <small>Controls</small>
+              <b>6</b>
+            </div>
+            <div class="metric">
+              <small>Extensions</small>
+              <b>Ready</b>
+            </div>
+          </div>
+        </div>
+
+        <div class="timeline">
+          <div class="step">
+            <span class="step-icon">1</span>
+            <div><strong>Type a URL or search</strong><span>Quartz normalizes links and sends search text to DuckDuckGo.</span></div>
+            <span class="pill">Built in</span>
+          </div>
+          <div class="step">
+            <span class="step-icon">2</span>
+            <div><strong>Navigate with native buttons</strong><span>Gestures, keyboard items, and toolbar controls share the same WebKit state.</span></div>
+            <span class="pill">Ready</span>
+          </div>
+          <div class="step">
+            <span class="step-icon">3</span>
+            <div><strong>Bring your extensions</strong><span>Install local WebExtension packages when macOS provides the framework.</span></div>
+            <span class="pill">15.4+</span>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+</body>
+</html>

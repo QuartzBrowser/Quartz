@@ -23,7 +23,7 @@ final class UBlockOriginContentBlocker {
     static let version = "1.71.0"
     static let releaseURL = URL(string: "https://github.com/gorhill/uBlock/releases/tag/1.71.0")!
 
-    private static let ruleListIdentifier = "org.quartz.uBlockOrigin.1.71.0.webkit-subset.3"
+    private static let ruleListIdentifier = "org.quartz.uBlockOrigin.1.71.0.webkit-subset.4"
 
     private let userContentController: WKUserContentController
     private let store: WKContentRuleListStore
@@ -175,6 +175,7 @@ private enum UBlockOriginContentBlockerError: LocalizedError {
 
 private struct UBlockOriginRuleCompiler {
     private let filterPaths = [
+        "uBlockOrigin/assets/quartz/privacy.txt",
         "uBlockOrigin/assets/ublock/filters.min.txt",
         "uBlockOrigin/assets/ublock/privacy.min.txt",
         "uBlockOrigin/assets/ublock/badware.min.txt",

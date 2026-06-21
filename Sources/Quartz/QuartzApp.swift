@@ -10,6 +10,7 @@ struct QuartzApp {
 
         app.delegate = delegate
         app.setActivationPolicy(.regular)
+        delegate.start()
         app.activate(ignoringOtherApps: true)
         app.run()
     }
@@ -20,6 +21,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private var window: NSWindow!
     private var webView: WKWebView!
     private var webExtensionSupport: AnyObject?
+    private var didStart = false
 
     private let addressField = NSTextField()
     private let backButton = BrowserController.makeIconButton(symbolName: "chevron.left", description: "Back")
@@ -32,6 +34,16 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private let homeURL = URL(string: "https://www.example.com")!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        start()
+    }
+
+    func start() {
+        guard didStart == false else {
+            return
+        }
+
+        didStart = true
+
         buildMenu()
         buildWindow()
         loadSavedExtensionsThenLoadHome()
@@ -357,7 +369,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
 
     private func load(_ url: URL) {
         addressField.stringValue = url.absoluteString
-        webView.load(URLRequest(url: url))
+
+        if url.isFileURL {
+            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        } else {
+            webView.load(URLRequest(url: url))
+        }
+
         updateControls()
     }
 

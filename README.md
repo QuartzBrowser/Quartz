@@ -30,13 +30,15 @@ swift build
 ## Features
 
 - WebKit-powered browsing
-- Optional WebExtension installation from local extension directories or ZIP archives on macOS 15.4+
+- Optional one-file `.qrx` WebExtension package installation on macOS 15.4+
 - Address/search field
 - Back, forward, reload, stop, and home controls
 - Basic keyboard menu items
 
 ## Extensions
 
-Quartz does not ship with a built-in ad blocker. Users can opt into extensions with **Extensions > Install Extension...** and choose a WebExtension directory or ZIP archive.
+Quartz extensions install as a single `.qrx` package. A `.qrx` file is a ZIP archive containing a WebExtension `manifest.json` at its root, saved with the `.qrx` file extension.
+
+Users can opt into extensions with **Extensions > Install .qrx Extension...** and choose a `.qrx` package. Quartz copies installed packages into Application Support and restores them on launch.
 
 The former bundled ad-blocking filters now live in a separate Quartz Ad Blocker extension package.

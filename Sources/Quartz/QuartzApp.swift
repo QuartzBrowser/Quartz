@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import WebKit
 
 @main
@@ -188,7 +189,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         let extensionsMenuItem = NSMenuItem()
         let extensionsMenu = NSMenu(title: "Extensions")
 
-        let installExtensionItem = NSMenuItem(title: "Install Extension...", action: #selector(installExtension(_:)), keyEquivalent: "e")
+        let installExtensionItem = NSMenuItem(title: "Install .qrx Extension...", action: #selector(installExtension(_:)), keyEquivalent: "e")
         installExtensionItem.target = self
         extensionsMenu.addItem(installExtensionItem)
 
@@ -261,12 +262,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         }
 
         let panel = NSOpenPanel()
-        panel.title = "Install Quartz Extension"
-        panel.message = "Choose a WebExtension directory or ZIP archive."
+        panel.title = "Install Quartz Extension Package"
+        panel.message = "Choose a Quartz extension package (.qrx)."
         panel.prompt = "Install"
         panel.canChooseFiles = true
-        panel.canChooseDirectories = true
+        panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "qrx") ?? .data]
 
         guard panel.runModal() == .OK, let url = panel.url else {
             return
@@ -305,7 +307,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private func showExtensionsUnavailableAlert() {
         showExtensionAlert(
             title: "Extensions Unavailable",
-            message: "Quartz can install WebExtension directories or ZIP archives on macOS 15.4 or later."
+            message: "Quartz can install .qrx WebExtension packages on macOS 15.4 or later."
         )
     }
 

@@ -23,7 +23,7 @@ final class UBlockOriginContentBlocker {
     static let version = "1.71.0"
     static let releaseURL = URL(string: "https://github.com/gorhill/uBlock/releases/tag/1.71.0")!
 
-    private static let ruleListIdentifier = "org.quartz.uBlockOrigin.1.71.0.webkit-subset.2"
+    private static let ruleListIdentifier = "org.quartz.uBlockOrigin.1.71.0.webkit-subset.3"
 
     private let userContentController: WKUserContentController
     private let store: WKContentRuleListStore
@@ -589,6 +589,11 @@ private struct UBlockOriginFilterOptions {
                         continue
                     }
                     let domains = Self.parseDomainOption(optionValue)
+                    // Dropping unsupported domains would widen a scoped filter into a global one.
+                    guard domains.containsUnsupportedDomain == false else {
+                        parsedShouldSkip = true
+                        continue
+                    }
                     parsedIfDomains.formUnion(domains.ifDomains)
                     parsedUnlessDomains.formUnion(domains.unlessDomains)
                     continue
@@ -634,9 +639,14 @@ private struct UBlockOriginFilterOptions {
         shouldSkip = parsedShouldSkip
     }
 
-    private static func parseDomainOption(_ optionValue: String) -> (ifDomains: Set<String>, unlessDomains: Set<String>) {
+    private static func parseDomainOption(_ optionValue: String) -> (
+        ifDomains: Set<String>,
+        unlessDomains: Set<String>,
+        containsUnsupportedDomain: Bool
+    ) {
         var ifDomains = Set<String>()
         var unlessDomains = Set<String>()
+        var containsUnsupportedDomain = false
 
         for rawDomain in optionValue.split(separator: "|") {
             let domainText = rawDomain.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -647,6 +657,7 @@ private struct UBlockOriginFilterOptions {
             let isNegated = domainText.hasPrefix("~")
             let domain = isNegated ? String(domainText.dropFirst()) : domainText
             guard let webKitDomain = makeWebKitDomainCondition(from: domain) else {
+                containsUnsupportedDomain = true
                 continue
             }
 
@@ -657,7 +668,7 @@ private struct UBlockOriginFilterOptions {
             }
         }
 
-        return (ifDomains, unlessDomains)
+        return (ifDomains, unlessDomains, containsUnsupportedDomain)
     }
 
     private static func makeWebKitDomainCondition(from domain: String) -> String? {

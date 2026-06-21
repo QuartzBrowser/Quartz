@@ -12,10 +12,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "Quartz",
-            resources: [
-                .process("Resources")
-            ]
+            name: "Quartz"
         )
     ]
 )

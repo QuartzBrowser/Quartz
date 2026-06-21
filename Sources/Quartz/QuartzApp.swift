@@ -5,10 +5,6 @@ import WebKit
 struct QuartzApp {
     @MainActor
     static func main() {
-        if CommandLine.arguments.contains("--validate-ublock-origin") {
-            UBlockOriginContentBlockerValidator.runAndExit()
-        }
-
         let app = NSApplication.shared
         let delegate = BrowserController()
 
@@ -23,9 +19,7 @@ struct QuartzApp {
 final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSTextFieldDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
-    private var uBlockOriginContentBlocker: UBlockOriginContentBlocker!
-    private var uBlockOriginStatus: UBlockOriginContentBlockerStatus?
-    private var uBlockOriginInstallError: Error?
+    private var webExtensionSupport: AnyObject?
 
     private let addressField = NSTextField()
     private let backButton = BrowserController.makeIconButton(symbolName: "chevron.left", description: "Back")
@@ -33,14 +27,14 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private let reloadButton = BrowserController.makeIconButton(symbolName: "arrow.clockwise", description: "Reload")
     private let stopButton = BrowserController.makeIconButton(symbolName: "xmark", description: "Stop")
     private let homeButton = BrowserController.makeIconButton(symbolName: "house", description: "Home")
-    private let contentBlockingButton = BrowserController.makeIconButton(symbolName: "shield", description: "uBlock Origin")
+    private let extensionsButton = BrowserController.makeIconButton(symbolName: "puzzlepiece.extension", description: "Extensions")
 
     private let homeURL = URL(string: "https://www.example.com")!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         buildWindow()
-        installContentBlockerThenLoadHome()
+        loadSavedExtensionsThenLoadHome()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -52,10 +46,15 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.userContentController = WKUserContentController()
 
+        if #available(macOS 15.4, *) {
+            let support = QuartzWebExtensionSupport(browser: self, webViewConfiguration: configuration)
+            configuration.webExtensionController = support.controller
+            webExtensionSupport = support
+        }
+
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
-        uBlockOriginContentBlocker = UBlockOriginContentBlocker(userContentController: configuration.userContentController)
 
         addressField.placeholderString = "Search or enter website name"
         addressField.target = self
@@ -74,8 +73,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         configure(button: reloadButton, action: #selector(reload(_:)))
         configure(button: stopButton, action: #selector(stopLoading(_:)))
         configure(button: homeButton, action: #selector(goHome(_:)))
-        configure(button: contentBlockingButton, action: #selector(showContentBlockingStatus(_:)))
-        contentBlockingButton.toolTip = "uBlock Origin \(UBlockOriginContentBlocker.version) is loading"
+        configure(button: extensionsButton, action: #selector(showExtensionStatus(_:)))
+        updateExtensionsButton()
 
         let toolbar = NSStackView(views: [
             backButton,
@@ -83,7 +82,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
             reloadButton,
             stopButton,
             homeButton,
-            contentBlockingButton,
+            extensionsButton,
             addressField,
             goButton
         ])
@@ -171,12 +170,22 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         homeItem.target = self
         navigationMenu.addItem(homeItem)
 
-        let contentBlockingItem = NSMenuItem(title: "uBlock Origin Status", action: #selector(showContentBlockingStatus(_:)), keyEquivalent: "")
-        contentBlockingItem.target = self
-        navigationMenu.addItem(contentBlockingItem)
-
         navigationMenuItem.submenu = navigationMenu
         mainMenu.addItem(navigationMenuItem)
+
+        let extensionsMenuItem = NSMenuItem()
+        let extensionsMenu = NSMenu(title: "Extensions")
+
+        let installExtensionItem = NSMenuItem(title: "Install Extension...", action: #selector(installExtension(_:)), keyEquivalent: "e")
+        installExtensionItem.target = self
+        extensionsMenu.addItem(installExtensionItem)
+
+        let extensionStatusItem = NSMenuItem(title: "Extension Status", action: #selector(showExtensionStatus(_:)), keyEquivalent: "")
+        extensionStatusItem.target = self
+        extensionsMenu.addItem(extensionStatusItem)
+
+        extensionsMenuItem.submenu = extensionsMenu
+        mainMenu.addItem(extensionsMenuItem)
 
         NSApplication.shared.mainMenu = mainMenu
     }
@@ -233,59 +242,117 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         load(homeURL)
     }
 
-    @objc private func showContentBlockingStatus(_ sender: Any?) {
-        let alert = NSAlert()
-        alert.messageText = "uBlock Origin \(UBlockOriginContentBlocker.version)"
-
-        if let uBlockOriginStatus {
-            alert.informativeText = """
-            \(uBlockOriginStatus.summary)
-            \(uBlockOriginStatus.blockRuleCount) blocking rules and \(uBlockOriginStatus.exceptionRuleCount) exception rules were adapted from \(uBlockOriginStatus.parsedLineCount) bundled filter lines.
-            """
-        } else if let uBlockOriginInstallError {
-            alert.informativeText = "Content blocking is unavailable: \(uBlockOriginInstallError.localizedDescription)"
-        } else {
-            alert.informativeText = "Content blocking is still being prepared."
+    @objc private func installExtension(_ sender: Any?) {
+        guard #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport else {
+            showExtensionsUnavailableAlert()
+            return
         }
 
-        alert.runModal()
-    }
+        let panel = NSOpenPanel()
+        panel.title = "Install Quartz Extension"
+        panel.message = "Choose a WebExtension directory or ZIP archive."
+        panel.prompt = "Install"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
 
-    private func installContentBlockerThenLoadHome() {
-        addressField.stringValue = "Installing uBlock Origin \(UBlockOriginContentBlocker.version)..."
-        contentBlockingButton.isEnabled = false
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
 
-        uBlockOriginContentBlocker.install { [weak self] result in
+        support.installExtension(from: url) { [weak self] result in
             guard let self else {
                 return
             }
 
+            self.updateExtensionsButton()
+
             switch result {
-            case .success(let status):
-                self.uBlockOriginStatus = status
-                self.uBlockOriginInstallError = nil
-                self.contentBlockingButton.image = NSImage(
-                    systemSymbolName: "shield.lefthalf.filled",
-                    accessibilityDescription: "uBlock Origin active"
-                )
-                self.contentBlockingButton.toolTip = status.summary
-                self.contentBlockingButton.isEnabled = true
-                print(status.summary)
-
+            case .success(let summary):
+                self.showExtensionAlert(title: "Extension Installed", message: summary)
             case .failure(let error):
-                self.uBlockOriginStatus = nil
-                self.uBlockOriginInstallError = error
-                self.contentBlockingButton.image = NSImage(
-                    systemSymbolName: "shield.slash",
-                    accessibilityDescription: "uBlock Origin unavailable"
-                )
-                self.contentBlockingButton.toolTip = "uBlock Origin unavailable: \(error.localizedDescription)"
-                self.contentBlockingButton.isEnabled = true
-                print("uBlock Origin unavailable: \(error.localizedDescription)")
+                self.showExtensionAlert(title: "Extension Could Not Be Installed", message: error.localizedDescription)
             }
-
-            self.load(self.homeURL)
         }
+    }
+
+    @objc private func showExtensionStatus(_ sender: Any?) {
+        guard #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport else {
+            showExtensionsUnavailableAlert()
+            return
+        }
+
+        let installedExtensions = support.installedExtensionNames
+        let message = installedExtensions.isEmpty
+            ? "No extensions are installed."
+            : installedExtensions.joined(separator: "\n")
+
+        showExtensionAlert(title: "Extensions", message: message)
+    }
+
+    private func showExtensionsUnavailableAlert() {
+        showExtensionAlert(
+            title: "Extensions Unavailable",
+            message: "Quartz can install WebExtension directories or ZIP archives on macOS 15.4 or later."
+        )
+    }
+
+    private func showExtensionAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    private func loadSavedExtensionsThenLoadHome() {
+        if #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport {
+            addressField.stringValue = "Loading extensions..."
+            extensionsButton.isEnabled = false
+
+            support.loadSavedExtensions { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.updateExtensionsButton()
+                self.load(self.homeURL)
+            }
+            return
+        }
+
+        load(homeURL)
+    }
+
+    private func updateExtensionsButton() {
+        guard #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport else {
+            extensionsButton.image = NSImage(
+                systemSymbolName: "puzzlepiece.extension",
+                accessibilityDescription: "Extensions unavailable"
+            )
+            extensionsButton.toolTip = "Extensions require macOS 15.4 or later"
+            extensionsButton.isEnabled = true
+            return
+        }
+
+        let count = support.installedExtensionNames.count
+        extensionsButton.image = NSImage(
+            systemSymbolName: count == 0 ? "puzzlepiece.extension" : "puzzlepiece.extension.fill",
+            accessibilityDescription: "Extensions"
+        )
+        extensionsButton.toolTip = count == 1 ? "1 extension installed" : "\(count) extensions installed"
+        extensionsButton.isEnabled = true
+    }
+
+    var extensionWebView: WKWebView? {
+        webView
+    }
+
+    var extensionWindow: NSWindow? {
+        window
+    }
+
+    func loadFromExtension(_ url: URL) {
+        load(url)
     }
 
     private func load(_ url: URL) {

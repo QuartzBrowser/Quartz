@@ -1,3 +1,0 @@
-! Quartz privacy fixes
-||analytics.s3.amazonaws.com^
-||analyticsengine.s3.amazonaws.com^

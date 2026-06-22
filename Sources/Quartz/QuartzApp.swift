@@ -30,8 +30,11 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private let reloadButton = BrowserController.makeIconButton(symbolName: "arrow.clockwise", description: "Reload")
     private let stopButton = BrowserController.makeIconButton(symbolName: "xmark", description: "Stop")
     private let homeButton = BrowserController.makeIconButton(symbolName: "house", description: "Home")
+    private let adBlockerButton = BrowserController.makeIconButton(symbolName: "shield", description: "Ad Blocker")
     private let readerButton = BrowserController.makeIconButton(symbolName: "doc.text", description: "Reading Mode")
     private let extensionsButton = BrowserController.makeIconButton(symbolName: "puzzlepiece.extension", description: "Extensions")
+    private let adBlocker = QuartzAdBlocker()
+    private var adBlockerMenuItem: NSMenuItem?
     private var readerModeMenuItem: NSMenuItem?
     private var isReaderModeActive = false
 
@@ -60,7 +63,9 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private func buildWindow() {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        configuration.userContentController = WKUserContentController()
+        let userContentController = WKUserContentController()
+        configuration.userContentController = userContentController
+        adBlocker.connect(to: userContentController)
 
         if #available(macOS 15.4, *) {
             let support = QuartzWebExtensionSupport(browser: self, webViewConfiguration: configuration)
@@ -89,8 +94,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         configure(button: reloadButton, action: #selector(reload(_:)))
         configure(button: stopButton, action: #selector(stopLoading(_:)))
         configure(button: homeButton, action: #selector(goHome(_:)))
+        configure(button: adBlockerButton, action: #selector(toggleAdBlocker(_:)))
         configure(button: readerButton, action: #selector(toggleReaderMode(_:)))
         configure(button: extensionsButton, action: #selector(showExtensionStatus(_:)))
+        updateAdBlockerControls()
         updateExtensionsButton()
 
         let toolbar = NSStackView(views: [
@@ -99,6 +106,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
             reloadButton,
             stopButton,
             homeButton,
+            adBlockerButton,
             readerButton,
             extensionsButton,
             addressField,
@@ -171,6 +179,12 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
 
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
+
+        let adBlockerItem = NSMenuItem(title: "Disable Basic Ad Blocker", action: #selector(toggleAdBlocker(_:)), keyEquivalent: "b")
+        adBlockerItem.keyEquivalentModifierMask = [.command, .shift]
+        adBlockerItem.target = self
+        viewMenu.addItem(adBlockerItem)
+        adBlockerMenuItem = adBlockerItem
 
         let readerItem = NSMenuItem(title: "Enter Reading Mode", action: #selector(toggleReaderMode(_:)), keyEquivalent: "r")
         readerItem.keyEquivalentModifierMask = [.command, .shift]
@@ -280,6 +294,29 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         }
     }
 
+    @objc private func toggleAdBlocker(_ sender: Any?) {
+        let shouldEnable = !adBlocker.isEnabled
+        adBlockerButton.isEnabled = false
+        adBlockerMenuItem?.isEnabled = false
+
+        adBlocker.setEnabled(shouldEnable) { [weak self] result in
+            guard let self else {
+                return
+            }
+
+            self.updateAdBlockerControls()
+
+            switch result {
+            case .success:
+                if self.webView.url != nil {
+                    self.webView.reload()
+                }
+            case .failure(let error):
+                self.showAdBlockerAlert(message: error.localizedDescription)
+            }
+        }
+    }
+
     @objc private func installExtension(_ sender: Any?) {
         guard #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport else {
             showExtensionsUnavailableAlert()
@@ -344,6 +381,26 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     }
 
     private func loadSavedExtensionsThenLoadHome() {
+        addressField.stringValue = "Preparing content filters..."
+        adBlockerButton.isEnabled = false
+        adBlockerMenuItem?.isEnabled = false
+
+        adBlocker.prepare { [weak self] result in
+            guard let self else {
+                return
+            }
+
+            if case .failure(let error) = result {
+                print("Quartz ad blocker unavailable: \(error.localizedDescription)")
+                self.adBlocker.disable()
+            }
+
+            self.updateAdBlockerControls()
+            self.loadSavedExtensionsThenLoadHomeAfterContentFilters()
+        }
+    }
+
+    private func loadSavedExtensionsThenLoadHomeAfterContentFilters() {
         if #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport {
             addressField.stringValue = "Loading extensions..."
             extensionsButton.isEnabled = false
@@ -360,6 +417,29 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         }
 
         load(homeURL)
+    }
+
+    private func updateAdBlockerControls() {
+        let isEnabled = adBlocker.isEnabled
+        adBlockerButton.image = NSImage(
+            systemSymbolName: isEnabled ? "shield.fill" : "shield",
+            accessibilityDescription: "Ad Blocker"
+        )
+        adBlockerButton.state = isEnabled ? .on : .off
+        adBlockerButton.toolTip = isEnabled ? "Basic Ad Blocker On" : "Basic Ad Blocker Off"
+        adBlockerButton.contentTintColor = isEnabled ? .controlAccentColor : nil
+        adBlockerButton.isEnabled = true
+
+        adBlockerMenuItem?.isEnabled = true
+        adBlockerMenuItem?.state = isEnabled ? .on : .off
+        adBlockerMenuItem?.title = isEnabled ? "Disable Basic Ad Blocker" : "Enable Basic Ad Blocker"
+    }
+
+    private func showAdBlockerAlert(message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Ad Blocker"
+        alert.informativeText = message
+        alert.runModal()
     }
 
     private func updateExtensionsButton() {
@@ -443,6 +523,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         forwardButton.isEnabled = webView.canGoForward
         reloadButton.isHidden = webView.isLoading
         stopButton.isHidden = !webView.isLoading
+        updateAdBlockerControls()
         updateReaderModeControls()
     }
 

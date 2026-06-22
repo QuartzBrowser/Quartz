@@ -30,9 +30,10 @@ swift build
 ## Features
 
 - WebKit-powered browsing
+- Reading mode for article-focused pages
 - Optional one-file `.qrx` WebExtension package installation on macOS 15.4+
 - Address/search field
-- Back, forward, reload, stop, and home controls
+- Back, forward, reload, stop, home, and reading controls
 - Basic keyboard menu items
 
 ## Extensions

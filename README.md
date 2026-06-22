@@ -27,6 +27,29 @@ swift run Quartz
 swift build
 ```
 
+## Package
+
+Create a local macOS app bundle:
+
+```sh
+Scripts/package-macos-app.sh
+open dist/Quartz.app
+```
+
+The default package is ad-hoc signed for local development. If macOS blocks a downloaded ad-hoc build with "Apple could not verify...", remove the quarantine attribute from the copy you trust:
+
+```sh
+xattr -dr com.apple.quarantine /path/to/Quartz.app
+```
+
+Public downloads require a Developer ID certificate and Apple notarization:
+
+```sh
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ZIP_APP=1 Scripts/package-macos-app.sh
+xcrun notarytool submit dist/Quartz.zip --keychain-profile <profile> --wait
+xcrun stapler staple dist/Quartz.app
+```
+
 ## Features
 
 - WebKit-powered browsing

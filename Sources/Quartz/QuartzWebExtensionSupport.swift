@@ -10,9 +10,7 @@ final class QuartzWebExtensionSupport: NSObject {
     private var extensionContextsByPath = [String: WKWebExtensionContext]()
     private let savedExtensionPathsKey = "QuartzInstalledExtensionPaths"
     private let appSupportDirectoryName = "Quartz"
-    private let installedPackagesDirectoryName = "Extensions"
-    private let extensionLoadCacheDirectoryName = "ExtensionLoadCache"
-    private let quartzExtensionPackageExtension = "qrx"
+    private let installedExtensionsDirectoryName = "Extensions"
 
     var installedExtensionNames: [String] {
         extensionContextsByPath.values
@@ -54,8 +52,8 @@ final class QuartzWebExtensionSupport: NSObject {
     func installExtension(from url: URL, completion: @escaping (Result<String, Error>) -> Void) {
         Task { @MainActor in
             do {
-                let installedPackageURL = try installPackage(from: url)
-                let summary = try await loadExtension(at: installedPackageURL, shouldSave: true)
+                let installedExtensionURL = try installExtensionSource(from: url)
+                let summary = try await loadExtension(at: installedExtensionURL, shouldSave: true)
                 completion(.success(summary))
             } catch {
                 completion(.failure(error))
@@ -87,20 +85,92 @@ final class QuartzWebExtensionSupport: NSObject {
         return summary(for: context, wasAlreadyLoaded: false)
     }
 
-    private func installPackage(from sourceURL: URL) throws -> URL {
+    private func installExtensionSource(from sourceURL: URL) throws -> URL {
         let standardizedSourceURL = sourceURL.standardizedFileURL
+        var isDirectory = ObjCBool(false)
 
-        guard isQuartzExtensionPackage(standardizedSourceURL) else {
-            throw QuartzWebExtensionSupportError.unsupportedPackage
+        guard FileManager.default.fileExists(atPath: standardizedSourceURL.path, isDirectory: &isDirectory) else {
+            throw QuartzWebExtensionSupportError.missingExtensionSource(standardizedSourceURL.lastPathComponent)
         }
 
-        guard FileManager.default.fileExists(atPath: standardizedSourceURL.path) else {
-            throw QuartzWebExtensionSupportError.missingPackage(standardizedSourceURL.lastPathComponent)
+        if isDirectory.boolValue {
+            let extensionRootURL = try extensionRootDirectory(for: standardizedSourceURL)
+            return try installUnpackedExtension(from: extensionRootURL)
         }
 
-        let packagesDirectoryURL = try installedPackagesDirectory()
-        let packageName = standardizedSourceURL.lastPathComponent
-        let destinationURL = packagesDirectoryURL.appendingPathComponent(packageName, isDirectory: false)
+        switch standardizedSourceURL.pathExtension.lowercased() {
+        case "zip":
+            return try installArchive(from: standardizedSourceURL)
+        case "crx":
+            return try installChromiumPackage(from: standardizedSourceURL)
+        default:
+            throw QuartzWebExtensionSupportError.unsupportedExtensionSource
+        }
+    }
+
+    private func installUnpackedExtension(from sourceURL: URL) throws -> URL {
+        let destinationURL = try installedDestinationURL(for: sourceURL, isDirectory: true)
+        return try copyExtensionItem(from: sourceURL, to: destinationURL)
+    }
+
+    private func installArchive(from sourceURL: URL) throws -> URL {
+        let destinationURL = try installedDestinationURL(for: sourceURL, isDirectory: false)
+        return try copyExtensionItem(from: sourceURL, to: destinationURL)
+    }
+
+    private func installChromiumPackage(from sourceURL: URL) throws -> URL {
+        let archiveData = try zipPayload(fromChromiumPackageAt: sourceURL)
+        let destinationURL = try installedDestinationURL(
+            for: sourceURL,
+            replacingPathExtensionWith: "zip",
+            isDirectory: false
+        )
+        let standardizedDestinationURL = destinationURL.standardizedFileURL
+
+        if extensionContextsByPath[standardizedDestinationURL.path] != nil {
+            return standardizedDestinationURL
+        }
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+
+        try archiveData.write(to: destinationURL, options: .atomic)
+        return standardizedDestinationURL
+    }
+
+    private func resourceBaseURL(for url: URL) throws -> URL {
+        var isDirectory = ObjCBool(false)
+
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            throw QuartzWebExtensionSupportError.missingExtensionSource(url.lastPathComponent)
+        }
+
+        if isDirectory.boolValue {
+            return try extensionRootDirectory(for: url)
+        }
+
+        guard url.pathExtension.lowercased() == "zip" else {
+            throw QuartzWebExtensionSupportError.unsupportedExtensionSource
+        }
+
+        return url
+    }
+
+    private func installedDestinationURL(
+        for sourceURL: URL,
+        replacingPathExtensionWith pathExtension: String? = nil,
+        isDirectory: Bool
+    ) throws -> URL {
+        let directoryURL = try installedExtensionsDirectory()
+        let destinationName = pathExtension.map { "\(sourceURL.deletingPathExtension().lastPathComponent).\($0)" }
+            ?? sourceURL.lastPathComponent
+
+        return directoryURL.appendingPathComponent(destinationName, isDirectory: isDirectory)
+    }
+
+    private func copyExtensionItem(from sourceURL: URL, to destinationURL: URL) throws -> URL {
+        let standardizedSourceURL = sourceURL.standardizedFileURL
         let standardizedDestinationURL = destinationURL.standardizedFileURL
 
         if extensionContextsByPath[standardizedDestinationURL.path] != nil {
@@ -119,46 +189,82 @@ final class QuartzWebExtensionSupport: NSObject {
         return standardizedDestinationURL
     }
 
-    private func resourceBaseURL(for url: URL) throws -> URL {
-        guard isQuartzExtensionPackage(url) else {
-            return url
+    private func extensionRootDirectory(for directoryURL: URL) throws -> URL {
+        if hasManifest(in: directoryURL) {
+            return directoryURL.standardizedFileURL
         }
 
-        return try mirroredZIPArchive(for: url)
-    }
-
-    private func mirroredZIPArchive(for packageURL: URL) throws -> URL {
-        let cacheDirectoryURL = try extensionLoadCacheDirectory()
-        let packageBaseName = packageURL.deletingPathExtension().lastPathComponent
-        let packageIdentifier = stableIdentifier(for: packageURL.path)
-        let archiveURL = cacheDirectoryURL
-            .appendingPathComponent("\(packageBaseName)-\(packageIdentifier)", isDirectory: false)
-            .appendingPathExtension("zip")
-
-        if FileManager.default.fileExists(atPath: archiveURL.path) {
-            try FileManager.default.removeItem(at: archiveURL)
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        let childDirectories = contents.filter { url in
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            return values?.isDirectory == true
         }
 
-        try FileManager.default.copyItem(at: packageURL, to: archiveURL)
-        return archiveURL.standardizedFileURL
+        if childDirectories.count == 1, hasManifest(in: childDirectories[0]) {
+            return childDirectories[0].standardizedFileURL
+        }
+
+        throw QuartzWebExtensionSupportError.missingManifest(directoryURL.lastPathComponent)
     }
 
-    private func installedPackagesDirectory() throws -> URL {
+    private func hasManifest(in directoryURL: URL) -> Bool {
+        var isDirectory = ObjCBool(false)
+        let manifestURL = directoryURL.appendingPathComponent("manifest.json", isDirectory: false)
+        let exists = FileManager.default.fileExists(atPath: manifestURL.path, isDirectory: &isDirectory)
+        return exists && isDirectory.boolValue == false
+    }
+
+    private func zipPayload(fromChromiumPackageAt packageURL: URL) throws -> Data {
+        let data = try Data(contentsOf: packageURL)
+        let bytes = [UInt8](data)
+
+        guard bytes.starts(with: [0x43, 0x72, 0x32, 0x34]) else {
+            throw QuartzWebExtensionSupportError.invalidChromiumPackage
+        }
+
+        let version = try littleEndianUInt32(in: bytes, at: 4)
+        let zipOffset: Int
+
+        switch version {
+        case 2:
+            let publicKeyLength = try littleEndianUInt32(in: bytes, at: 8)
+            let signatureLength = try littleEndianUInt32(in: bytes, at: 12)
+            zipOffset = 16 + Int(publicKeyLength) + Int(signatureLength)
+        case 3:
+            let headerLength = try littleEndianUInt32(in: bytes, at: 8)
+            zipOffset = 12 + Int(headerLength)
+        default:
+            throw QuartzWebExtensionSupportError.invalidChromiumPackage
+        }
+
+        guard zipOffset + 2 <= bytes.count, bytes[zipOffset] == 0x50, bytes[zipOffset + 1] == 0x4b else {
+            throw QuartzWebExtensionSupportError.invalidChromiumPackage
+        }
+
+        return data.subdata(in: zipOffset..<data.count)
+    }
+
+    private func littleEndianUInt32(in bytes: [UInt8], at offset: Int) throws -> UInt32 {
+        guard offset >= 0, offset + 4 <= bytes.count else {
+            throw QuartzWebExtensionSupportError.invalidChromiumPackage
+        }
+
+        return UInt32(bytes[offset])
+            | (UInt32(bytes[offset + 1]) << 8)
+            | (UInt32(bytes[offset + 2]) << 16)
+            | (UInt32(bytes[offset + 3]) << 24)
+    }
+
+    private func installedExtensionsDirectory() throws -> URL {
         let appSupportURL = try quartzStorageDirectory(
             searchPathDirectory: .applicationSupportDirectory,
             unavailableError: .applicationSupportUnavailable
         )
-        let directoryURL = appSupportURL.appendingPathComponent(installedPackagesDirectoryName, isDirectory: true)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        return directoryURL
-    }
-
-    private func extensionLoadCacheDirectory() throws -> URL {
-        let cacheURL = try quartzStorageDirectory(
-            searchPathDirectory: .cachesDirectory,
-            unavailableError: .cacheUnavailable
-        )
-        let directoryURL = cacheURL.appendingPathComponent(extensionLoadCacheDirectoryName, isDirectory: true)
+        let directoryURL = appSupportURL.appendingPathComponent(installedExtensionsDirectoryName, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return directoryURL
     }
@@ -174,20 +280,6 @@ final class QuartzWebExtensionSupport: NSObject {
         let directoryURL = baseURL.appendingPathComponent(appSupportDirectoryName, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return directoryURL
-    }
-
-    private func isQuartzExtensionPackage(_ url: URL) -> Bool {
-        url.pathExtension.lowercased() == quartzExtensionPackageExtension
-    }
-
-    private func stableIdentifier(for text: String) -> String {
-        var hash: UInt64 = 5381
-
-        for byte in text.utf8 {
-            hash = ((hash << 5) &+ hash) &+ UInt64(byte)
-        }
-
-        return String(hash, radix: 16)
     }
 
     private func grantInstallTimePermissions(to context: WKWebExtensionContext) {
@@ -345,10 +437,11 @@ extension QuartzWebExtensionSupport: WKWebExtensionTab {
 private enum QuartzWebExtensionSupportError: LocalizedError {
     case missingOptionsPage
     case missingPopup
-    case unsupportedPackage
-    case missingPackage(String)
+    case unsupportedExtensionSource
+    case missingExtensionSource(String)
+    case missingManifest(String)
+    case invalidChromiumPackage
     case applicationSupportUnavailable
-    case cacheUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -356,14 +449,16 @@ private enum QuartzWebExtensionSupportError: LocalizedError {
             "The extension does not provide an options page."
         case .missingPopup:
             "The extension does not provide a popup that Quartz can display."
-        case .unsupportedPackage:
-            "Choose a Quartz extension package with the .qrx file extension."
-        case .missingPackage(let packageName):
-            "Quartz could not find \(packageName)."
+        case .unsupportedExtensionSource:
+            "Choose an unpacked Chromium extension folder, .zip archive, or .crx package."
+        case .missingExtensionSource(let sourceName):
+            "Quartz could not find \(sourceName)."
+        case .missingManifest(let directoryName):
+            "Quartz could not find manifest.json in \(directoryName)."
+        case .invalidChromiumPackage:
+            "Quartz could not read that Chromium extension package."
         case .applicationSupportUnavailable:
             "Quartz could not access Application Support to install the extension."
-        case .cacheUnavailable:
-            "Quartz could not prepare the extension package for WebKit."
         }
     }
 }

@@ -220,7 +220,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         let extensionsMenuItem = NSMenuItem()
         let extensionsMenu = NSMenu(title: "Extensions")
 
-        let installExtensionItem = NSMenuItem(title: "Install .qrx Extension...", action: #selector(installExtension(_:)), keyEquivalent: "e")
+        let installExtensionItem = NSMenuItem(title: "Install Chromium Extension...", action: #selector(installExtension(_:)), keyEquivalent: "e")
         installExtensionItem.target = self
         extensionsMenu.addItem(installExtensionItem)
 
@@ -324,13 +324,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         }
 
         let panel = NSOpenPanel()
-        panel.title = "Install Quartz Extension Package"
-        panel.message = "Choose a Quartz extension package (.qrx)."
+        panel.title = "Install Chromium Extension"
+        panel.message = "Choose an unpacked extension folder, .zip archive, or .crx package."
         panel.prompt = "Install"
         panel.canChooseFiles = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [UTType(filenameExtension: "qrx") ?? .data]
+        panel.allowedContentTypes = BrowserController.extensionInstallContentTypes()
 
         guard panel.runModal() == .OK, let url = panel.url else {
             return
@@ -369,8 +369,20 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private func showExtensionsUnavailableAlert() {
         showExtensionAlert(
             title: "Extensions Unavailable",
-            message: "Quartz can install .qrx WebExtension packages on macOS 15.4 or later."
+            message: "Quartz can install Chromium-format WebExtensions on macOS 15.4 or later."
         )
+    }
+
+    private static func extensionInstallContentTypes() -> [UTType] {
+        var contentTypes: [UTType] = [.folder]
+
+        for filenameExtension in ["zip", "crx"] {
+            if let contentType = UTType(filenameExtension: filenameExtension) {
+                contentTypes.append(contentType)
+            }
+        }
+
+        return contentTypes
     }
 
     private func showExtensionAlert(title: String, message: String) {

@@ -56,6 +56,7 @@ xcrun stapler staple dist/Quartz.app
 - Tiny built-in ad blocker for obvious third-party ad resources
 - Reading mode for article-focused pages
 - Optional one-file `.qrx` WebExtension package installation on macOS 15.4+
+- Direct GitHub issue submission for the Quartz repository through a configured issue relay
 - Address/search field
 - Back, forward, reload, stop, home, and reading controls
 - Basic keyboard menu items
@@ -67,3 +68,25 @@ Quartz extensions install as a single `.qrx` package. A `.qrx` file is a ZIP arc
 Users can opt into extensions with **Extensions > Install .qrx Extension...** and choose a `.qrx` package. Quartz copies installed packages into Application Support and restores them on launch.
 
 Quartz includes a tiny built-in blocker for a few obvious third-party ad resources. The former larger bundled ad-blocking filters now live in a separate Quartz Ad Blocker extension package.
+
+## Issue Submission
+
+Quartz can submit browser issues without asking users for a GitHub token. Configure a server-side issue relay that owns the GitHub credential, then point the app at it:
+
+```sh
+QUARTZ_ISSUE_SUBMISSION_URL="https://example.com/quartz/issues" swift run Quartz
+ISSUE_SUBMISSION_URL="https://example.com/quartz/issues" Scripts/package-macos-app.sh
+```
+
+The relay receives JSON from the app and creates the GitHub issue with a token stored on the server. `Scripts/github-issue-relay-worker.js` is a Cloudflare Worker relay and `wrangler.toml` is ready for deployment.
+
+For a Cloudflare Worker deployment:
+
+```sh
+node Scripts/test-github-issue-relay.mjs
+npx wrangler kv namespace create QUARTZ_ISSUE_RELAY_KV
+npx wrangler secret put GITHUB_TOKEN
+npx wrangler deploy
+```
+
+Store a fine-grained GitHub token as the `GITHUB_TOKEN` secret with **Issues: write** access to `QuartzBrowser/Quartz`. Add the KV namespace id that Wrangler prints to `wrangler.toml` to enable per-IP rate limiting, then deploy again. Browser-origin requests are rejected unless the Worker has an `ALLOWED_ORIGIN` environment variable; native Quartz submissions do not need it.

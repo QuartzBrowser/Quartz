@@ -33,12 +33,22 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private let adBlockerButton = BrowserController.makeIconButton(symbolName: "shield", description: "Ad Blocker")
     private let readerButton = BrowserController.makeIconButton(symbolName: "doc.text", description: "Reading Mode")
     private let extensionsButton = BrowserController.makeIconButton(symbolName: "puzzlepiece.extension", description: "Extensions")
+    private let submitIssueButton = BrowserController.makeIconButton(symbolName: "exclamationmark.bubble", description: "Submit Issue")
     private let adBlocker = QuartzAdBlocker()
+    private let issueReporter = GitHubIssueReporter(owner: "QuartzBrowser", repository: "Quartz")
     private var adBlockerMenuItem: NSMenuItem?
     private var readerModeMenuItem: NSMenuItem?
+    private var submitIssueMenuItem: NSMenuItem?
     private var isReaderModeActive = false
+    private var isSubmittingIssue = false
 
     private let homeURL = URL(string: "https://www.example.com")!
+
+    private struct IssueForm {
+        let view: NSView
+        let titleField: NSTextField
+        let bodyTextView: NSTextView
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         start()
@@ -97,6 +107,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         configure(button: adBlockerButton, action: #selector(toggleAdBlocker(_:)))
         configure(button: readerButton, action: #selector(toggleReaderMode(_:)))
         configure(button: extensionsButton, action: #selector(showExtensionStatus(_:)))
+        configure(button: submitIssueButton, action: #selector(showIssueReporter(_:)))
         updateAdBlockerControls()
         updateExtensionsButton()
 
@@ -109,6 +120,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
             adBlockerButton,
             readerButton,
             extensionsButton,
+            submitIssueButton,
             addressField,
             goButton
         ])
@@ -230,6 +242,18 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
 
         extensionsMenuItem.submenu = extensionsMenu
         mainMenu.addItem(extensionsMenuItem)
+
+        let helpMenuItem = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+
+        let submitIssueItem = NSMenuItem(title: "Submit Issue...", action: #selector(showIssueReporter(_:)), keyEquivalent: "i")
+        submitIssueItem.keyEquivalentModifierMask = [.command, .shift]
+        submitIssueItem.target = self
+        helpMenu.addItem(submitIssueItem)
+        submitIssueMenuItem = submitIssueItem
+
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
 
         NSApplication.shared.mainMenu = mainMenu
     }
@@ -364,6 +388,178 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
             : installedExtensions.joined(separator: "\n")
 
         showExtensionAlert(title: "Extensions", message: message)
+    }
+
+    @objc private func showIssueReporter(_ sender: Any?) {
+        let form = makeIssueForm()
+        let alert = NSAlert()
+        alert.messageText = "Submit Issue"
+        alert.informativeText = "Create a GitHub issue in \(issueReporter.repositoryName)."
+        alert.accessoryView = form.view
+        alert.addButton(withTitle: "Submit")
+        alert.addButton(withTitle: "Cancel")
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+
+        let title = form.titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = form.bodyTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !title.isEmpty else {
+            showIssueAlert(title: "Issue Needs a Title", message: "Enter a short title before submitting.")
+            return
+        }
+
+        submitIssue(
+            title: title,
+            body: body.isEmpty ? "Submitted from Quartz." : body
+        )
+    }
+
+    private func makeIssueForm() -> IssueForm {
+        let titleField = NSTextField(string: defaultIssueTitle())
+        titleField.placeholderString = "Issue title"
+        titleField.font = .systemFont(ofSize: 13)
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.widthAnchor.constraint(equalToConstant: 520).isActive = true
+
+        let bodyTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        bodyTextView.string = defaultIssueBody()
+        bodyTextView.font = .systemFont(ofSize: 13)
+        bodyTextView.isRichText = false
+        bodyTextView.isAutomaticQuoteSubstitutionEnabled = false
+        bodyTextView.isAutomaticDashSubstitutionEnabled = false
+        bodyTextView.isHorizontallyResizable = false
+        bodyTextView.isVerticallyResizable = true
+        bodyTextView.autoresizingMask = [.width]
+        bodyTextView.textContainer?.containerSize = NSSize(width: 520, height: CGFloat.greatestFiniteMagnitude)
+        bodyTextView.textContainer?.widthTracksTextView = true
+
+        let bodyScrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        bodyScrollView.borderType = .bezelBorder
+        bodyScrollView.hasVerticalScroller = true
+        bodyScrollView.documentView = bodyTextView
+        bodyScrollView.translatesAutoresizingMaskIntoConstraints = false
+        bodyScrollView.widthAnchor.constraint(equalToConstant: 520).isActive = true
+        bodyScrollView.heightAnchor.constraint(equalToConstant: 220).isActive = true
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(NSTextField(labelWithString: "Title"))
+        stack.addArrangedSubview(titleField)
+        stack.addArrangedSubview(NSTextField(labelWithString: "Details"))
+        stack.addArrangedSubview(bodyScrollView)
+
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 295))
+        view.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: view.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        return IssueForm(
+            view: view,
+            titleField: titleField,
+            bodyTextView: bodyTextView
+        )
+    }
+
+    private func defaultIssueTitle() -> String {
+        if let title = webView.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return "Issue on \(title)"
+        }
+
+        if let host = webView.url?.host, !host.isEmpty {
+            return "Issue on \(host)"
+        }
+
+        return "Quartz issue"
+    }
+
+    private func defaultIssueBody() -> String {
+        var lines = [
+            "## What happened?",
+            "",
+            "",
+            "## Context"
+        ]
+
+        if let url = webView.url?.absoluteString {
+            lines.append("- Page URL: \(url)")
+        }
+
+        if let title = webView.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            lines.append("- Page title: \(title)")
+        }
+
+        lines.append("- macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
+        lines.append("- Submitted from: Quartz")
+        return lines.joined(separator: "\n")
+    }
+
+    private func submitIssue(title: String, body: String) {
+        isSubmittingIssue = true
+        updateIssueSubmissionControls()
+
+        Task { @MainActor in
+            do {
+                let issue = try await issueReporter.createIssue(
+                    title: title,
+                    body: body,
+                    context: issueSubmissionContext()
+                )
+                showIssueSubmittedAlert(issue: issue)
+            } catch {
+                showIssueAlert(title: "Issue Not Submitted", message: error.localizedDescription)
+            }
+
+            isSubmittingIssue = false
+            updateIssueSubmissionControls()
+        }
+    }
+
+    private func updateIssueSubmissionControls() {
+        submitIssueButton.isEnabled = !isSubmittingIssue
+        submitIssueButton.toolTip = isSubmittingIssue ? "Submitting Issue..." : "Submit Issue"
+        submitIssueMenuItem?.isEnabled = !isSubmittingIssue
+    }
+
+    private func issueSubmissionContext() -> IssueSubmissionContext {
+        let pageTitle = webView.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return IssueSubmissionContext(
+            pageURL: webView.url?.absoluteString,
+            pageTitle: pageTitle?.isEmpty == false ? pageTitle : nil
+        )
+    }
+
+    private func showIssueSubmittedAlert(issue: GitHubIssue) {
+        let alert = NSAlert()
+        alert.messageText = "Issue Submitted"
+        alert.informativeText = "Created \(issueReporter.repositoryName)#\(issue.number)."
+
+        alert.addButton(withTitle: "Open Issue")
+        alert.addButton(withTitle: "OK")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            load(issue.htmlURL)
+        }
+    }
+
+    private func showIssueAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
     }
 
     private func showExtensionsUnavailableAlert() {

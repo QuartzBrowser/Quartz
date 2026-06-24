@@ -1,6 +1,8 @@
 .build/
 dist/
 DerivedData/
+node_modules/
+.wrangler/
 *.xcuserdata/
 *.xcuserstate
 .DS_Store

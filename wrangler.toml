@@ -1,0 +1,20 @@
+name = "quartz-issue-relay"
+main = "Scripts/github-issue-relay-worker.js"
+compatibility_date = "2026-06-23"
+workers_dev = true
+
+# Set the GitHub credential with:
+#   npx wrangler secret put GITHUB_TOKEN
+#
+# Optional browser-origin support. Native Quartz submissions do not send Origin.
+# [vars]
+# ALLOWED_ORIGIN = "https://example.com"
+# RATE_LIMIT_MAX = "10"
+# RATE_LIMIT_WINDOW_SECONDS = "3600"
+#
+# Optional per-IP rate limiting. Create a namespace with:
+#   npx wrangler kv namespace create QUARTZ_ISSUE_RELAY_KV
+#
+# [[kv_namespaces]]
+# binding = "QUARTZ_ISSUE_RELAY_KV"
+# id = "replace-with-kv-namespace-id"

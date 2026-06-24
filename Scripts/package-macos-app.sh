@@ -9,9 +9,19 @@ BUILD_NUMBER="${BUILD_NUMBER:-2}"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-"${ROOT_DIR}/dist"}"
 APP_DIR="${DIST_DIR}/${PRODUCT_NAME}.app"
+ISSUE_SUBMISSION_URL="${ISSUE_SUBMISSION_URL:-}"
+
+xml_escape() {
+    local value="$1"
+    value="${value//&/&amp;}"
+    value="${value//</&lt;}"
+    value="${value//>/&gt;}"
+    printf '%s' "${value}"
+}
 
 cd "${ROOT_DIR}"
 
+swift build -c "${CONFIGURATION}" --arch arm64 --arch x86_64
 BIN_DIR="$(swift build --show-bin-path -c "${CONFIGURATION}" --arch arm64 --arch x86_64)"
 EXECUTABLE="${BIN_DIR}/${PRODUCT_NAME}"
 
@@ -25,6 +35,8 @@ mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
 
 cp "${EXECUTABLE}" "${APP_DIR}/Contents/MacOS/${PRODUCT_NAME}"
 chmod 755 "${APP_DIR}/Contents/MacOS/${PRODUCT_NAME}"
+
+ISSUE_SUBMISSION_URL_PLIST="$(xml_escape "${ISSUE_SUBMISSION_URL}")"
 
 cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -51,6 +63,12 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+$(if [[ -n "${ISSUE_SUBMISSION_URL}" ]]; then
+cat <<ISSUE_PLIST
+    <key>QuartzIssueSubmissionURL</key>
+    <string>${ISSUE_SUBMISSION_URL_PLIST}</string>
+ISSUE_PLIST
+fi)
 </dict>
 </plist>
 PLIST

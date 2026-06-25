@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/QuartzBrowser/Quartz/compare/v0.4.0...v0.4.1) (2026-06-25)
+
+
+### Bug Fixes
+
+* load extension sandbox pages ([87ffeed](https://github.com/QuartzBrowser/Quartz/commit/87ffeed97eaeacf68275542a131c8f76b25c1f5d))
+* load extension sandbox pages ([9086da1](https://github.com/QuartzBrowser/Quartz/commit/9086da168cc205d83936dc24fdd90b06be98e0e8))
+
 ## [0.4.0](https://github.com/QuartzBrowser/Quartz/compare/v0.3.0...v0.4.0) (2026-06-25)
 
 

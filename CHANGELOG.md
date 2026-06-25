@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/QuartzBrowser/Quartz/compare/v0.4.1...v0.4.2) (2026-06-25)
+
+
+### Bug Fixes
+
+* build macOS app before packaging ([ad14c01](https://github.com/QuartzBrowser/Quartz/commit/ad14c01a02c73e2e0271e77a18fe93d128881385))
+
 ## [0.4.1](https://github.com/QuartzBrowser/Quartz/compare/v0.4.0...v0.4.1) (2026-06-25)
 
 

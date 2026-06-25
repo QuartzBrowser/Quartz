@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/QuartzBrowser/Quartz/compare/v0.3.0...v0.4.0) (2026-06-25)
+
+
+### Features
+
+* add Chrome Web Store extension downloads ([e987199](https://github.com/QuartzBrowser/Quartz/commit/e987199fa9eafe7513aa22f771b207fa3c9249d2))
+* add Chrome Web Store extension downloads ([9eb20a2](https://github.com/QuartzBrowser/Quartz/commit/9eb20a2149e8a82c63c488a5dac4af7a57fbd71f))
+
+
+### Bug Fixes
+
+* surface Web Store listing install action ([44f52e4](https://github.com/QuartzBrowser/Quartz/commit/44f52e49ad89ec32b564c2d1eaed1a3cf22fc732))
+
 ## [0.3.0](https://github.com/QuartzBrowser/Quartz/compare/v0.2.0...v0.3.0) (2026-06-25)
 
 

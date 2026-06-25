@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_NAME="${PRODUCT_NAME:-Quartz}"
 BUNDLE_ID="${BUNDLE_ID:-org.quartzbrowser.Quartz}"
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.2.0}" # x-release-please-version
 BUILD_NUMBER="${BUILD_NUMBER:-2}"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-"${ROOT_DIR}/dist"}"

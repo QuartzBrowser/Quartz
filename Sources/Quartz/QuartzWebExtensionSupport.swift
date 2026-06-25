@@ -11,6 +11,8 @@ final class QuartzWebExtensionSupport: NSObject {
     private let savedExtensionPathsKey = "QuartzInstalledExtensionPaths"
     private let appSupportDirectoryName = "Quartz"
     private let installedExtensionsDirectoryName = "Extensions"
+    private let chromeWebStoreDownloadDirectoryName = "ChromeWebStoreDownloads"
+    private let chromeWebStoreUpdateURL = URL(string: "https://clients2.google.com/service/update2/crx")!
 
     var installedExtensionNames: [String] {
         extensionContextsByPath.values
@@ -53,6 +55,24 @@ final class QuartzWebExtensionSupport: NSObject {
         Task { @MainActor in
             do {
                 let installedExtensionURL = try installExtensionSource(from: url)
+                let summary = try await loadExtension(at: installedExtensionURL, shouldSave: true)
+                completion(.success(summary))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func installExtensionFromChromeWebStore(_ reference: String, completion: @escaping (Result<String, Error>) -> Void) {
+        Task { @MainActor in
+            do {
+                let extensionID = try Self.chromeWebStoreExtensionID(from: reference)
+                let downloadedPackageURL = try await downloadChromeWebStoreExtension(withID: extensionID)
+                defer {
+                    try? FileManager.default.removeItem(at: downloadedPackageURL)
+                }
+
+                let installedExtensionURL = try installExtensionSource(from: downloadedPackageURL)
                 let summary = try await loadExtension(at: installedExtensionURL, shouldSave: true)
                 completion(.success(summary))
             } catch {
@@ -106,6 +126,70 @@ final class QuartzWebExtensionSupport: NSObject {
         default:
             throw QuartzWebExtensionSupportError.unsupportedExtensionSource
         }
+    }
+
+    private func downloadChromeWebStoreExtension(withID extensionID: String) async throws -> URL {
+        let downloadURL = try chromeWebStoreDownloadURL(for: extensionID)
+        var request = URLRequest(url: downloadURL)
+        request.timeoutInterval = 90
+
+        let (temporaryURL, response) = try await URLSession.shared.download(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode)
+        else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode
+            throw QuartzWebExtensionSupportError.chromeWebStoreDownloadFailed(statusCode)
+        }
+
+        let downloadDirectoryURL = try chromeWebStoreDownloadDirectory()
+        let destinationURL = downloadDirectoryURL.appendingPathComponent("\(extensionID).crx", isDirectory: false)
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+
+        try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+        return destinationURL.standardizedFileURL
+    }
+
+    private func chromeWebStoreDownloadURL(for extensionID: String) throws -> URL {
+        guard var components = URLComponents(url: chromeWebStoreUpdateURL, resolvingAgainstBaseURL: false) else {
+            throw QuartzWebExtensionSupportError.invalidChromeWebStoreReference
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "response", value: "redirect"),
+            URLQueryItem(name: "prodversion", value: "2147483647"),
+            URLQueryItem(name: "acceptformat", value: "crx2,crx3"),
+            URLQueryItem(name: "x", value: "id=\(extensionID)&uc")
+        ]
+
+        guard let url = components.url else {
+            throw QuartzWebExtensionSupportError.invalidChromeWebStoreReference
+        }
+
+        return url
+    }
+
+    private static func chromeWebStoreExtensionID(from reference: String) throws -> String {
+        let trimmedReference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tokens = trimmedReference.components(separatedBy: CharacterSet.alphanumerics.inverted)
+
+        for token in tokens where isChromeWebStoreExtensionID(token) {
+            return token.lowercased()
+        }
+
+        throw QuartzWebExtensionSupportError.invalidChromeWebStoreReference
+    }
+
+    private static func isChromeWebStoreExtensionID(_ token: String) -> Bool {
+        let lowercasedToken = token.lowercased()
+        guard lowercasedToken.count == 32 else {
+            return false
+        }
+
+        let validCharacters = CharacterSet(charactersIn: "abcdefghijklmnop")
+        return lowercasedToken.unicodeScalars.allSatisfy { validCharacters.contains($0) }
     }
 
     private func installUnpackedExtension(from sourceURL: URL) throws -> URL {
@@ -265,6 +349,16 @@ final class QuartzWebExtensionSupport: NSObject {
             unavailableError: .applicationSupportUnavailable
         )
         let directoryURL = appSupportURL.appendingPathComponent(installedExtensionsDirectoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return directoryURL
+    }
+
+    private func chromeWebStoreDownloadDirectory() throws -> URL {
+        let appSupportURL = try quartzStorageDirectory(
+            searchPathDirectory: .applicationSupportDirectory,
+            unavailableError: .applicationSupportUnavailable
+        )
+        let directoryURL = appSupportURL.appendingPathComponent(chromeWebStoreDownloadDirectoryName, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return directoryURL
     }
@@ -442,6 +536,8 @@ private enum QuartzWebExtensionSupportError: LocalizedError {
     case missingManifest(String)
     case invalidChromiumPackage
     case applicationSupportUnavailable
+    case invalidChromeWebStoreReference
+    case chromeWebStoreDownloadFailed(Int?)
 
     var errorDescription: String? {
         switch self {
@@ -459,6 +555,14 @@ private enum QuartzWebExtensionSupportError: LocalizedError {
             "Quartz could not read that Chromium extension package."
         case .applicationSupportUnavailable:
             "Quartz could not access Application Support to install the extension."
+        case .invalidChromeWebStoreReference:
+            "Paste a Chrome Web Store extension URL or a 32-character extension ID."
+        case .chromeWebStoreDownloadFailed(let statusCode):
+            if let statusCode {
+                "Quartz could not download that extension from the Chrome Web Store. The server returned HTTP \(statusCode)."
+            } else {
+                "Quartz could not download that extension from the Chrome Web Store."
+            }
         }
     }
 }

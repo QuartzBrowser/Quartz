@@ -2,6 +2,16 @@ import AppKit
 @preconcurrency import WebKit
 
 @available(macOS 15.4, *)
+struct QuartzInstalledWebExtension {
+    let identifier: String
+    let displayName: String
+    let actionLabel: String
+    let badgeText: String
+    let icon: NSImage?
+    let isActionEnabled: Bool
+}
+
+@available(macOS 15.4, *)
 @MainActor
 final class QuartzWebExtensionSupport: NSObject {
     let controller: WKWebExtensionController
@@ -12,15 +22,34 @@ final class QuartzWebExtensionSupport: NSObject {
     private let appSupportDirectoryName = "Quartz"
     private let installedExtensionsDirectoryName = "Extensions"
     private let chromeWebStoreDownloadDirectoryName = "ChromeWebStoreDownloads"
+    private let sandboxedExtensionPagesDirectoryName = "SandboxedExtensionPages"
     private let chromeWebStoreUpdateURL = URL(string: "https://clients2.google.com/service/update2/crx")!
 
     var installedExtensionNames: [String] {
         extensionContextsByPath.values
-            .map { context in
-                let extensionName = context.webExtension.displayName ?? context.webExtension.displayShortName
-                return extensionName ?? context.webExtension.version.map { "Extension \($0)" } ?? "Unnamed Extension"
-            }
+            .map { displayName(for: $0) }
             .sorted()
+    }
+
+    var installedExtensions: [QuartzInstalledWebExtension] {
+        extensionContextsByPath
+            .map { path, context in
+                let action = context.action(for: self)
+                let displayName = displayName(for: context)
+                let actionLabel = nonEmpty(action?.label) ?? displayName
+
+                return QuartzInstalledWebExtension(
+                    identifier: path,
+                    displayName: displayName,
+                    actionLabel: actionLabel,
+                    badgeText: action?.badgeText ?? "",
+                    icon: action?.icon(for: NSSize(width: 18, height: 18)),
+                    isActionEnabled: action?.isEnabled == true
+                )
+            }
+            .sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
     }
 
     init(browser: BrowserController, webViewConfiguration: WKWebViewConfiguration) {
@@ -79,6 +108,23 @@ final class QuartzWebExtensionSupport: NSObject {
                 completion(.failure(error))
             }
         }
+    }
+
+    func performAction(forInstalledExtensionWithIdentifier identifier: String) throws {
+        guard let context = extensionContextsByPath[identifier] else {
+            throw QuartzWebExtensionSupportError.missingInstalledExtension
+        }
+
+        let displayName = displayName(for: context)
+        guard let action = context.action(for: self) else {
+            throw QuartzWebExtensionSupportError.missingAction(displayName)
+        }
+
+        guard action.isEnabled else {
+            throw QuartzWebExtensionSupportError.disabledAction(displayName)
+        }
+
+        context.performAction(for: self)
     }
 
     private func loadExtension(at url: URL, shouldSave: Bool) async throws -> String {
@@ -363,6 +409,16 @@ final class QuartzWebExtensionSupport: NSObject {
         return directoryURL
     }
 
+    private func sandboxedExtensionPagesDirectory() throws -> URL {
+        let appSupportURL = try quartzStorageDirectory(
+            searchPathDirectory: .applicationSupportDirectory,
+            unavailableError: .applicationSupportUnavailable
+        )
+        let directoryURL = appSupportURL.appendingPathComponent(sandboxedExtensionPagesDirectoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return directoryURL
+    }
+
     private func quartzStorageDirectory(
         searchPathDirectory: FileManager.SearchPathDirectory,
         unavailableError: QuartzWebExtensionSupportError
@@ -386,8 +442,187 @@ final class QuartzWebExtensionSupport: NSObject {
         }
     }
 
+    private func displayName(for context: WKWebExtensionContext) -> String {
+        nonEmpty(context.webExtension.displayName)
+            ?? nonEmpty(context.webExtension.displayShortName)
+            ?? context.webExtension.version.map { "Extension \($0)" }
+            ?? "Unnamed Extension"
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.isEmpty == false
+        else {
+            return nil
+        }
+
+        return value
+    }
+
+    private func sandboxedExtensionPage(
+        for url: URL,
+        context: WKWebExtensionContext
+    ) throws -> (pageURL: URL, readAccessURL: URL)? {
+        let pagePath = normalizedExtensionResourcePath(url.path)
+        guard pagePath.isEmpty == false else {
+            return nil
+        }
+
+        guard pagePath.split(separator: "/").contains("..") == false else {
+            throw QuartzWebExtensionSupportError.sandboxedExtensionPageUnavailable(pagePath)
+        }
+
+        guard let installedPath = installedPath(for: context) else {
+            return nil
+        }
+
+        let installedURL = URL(fileURLWithPath: installedPath).standardizedFileURL
+        let resourceDirectoryURL = try localResourceDirectory(for: installedURL)
+        let sandboxPages = try sandboxPagePaths(in: resourceDirectoryURL)
+        guard sandboxPages.contains(pagePath) else {
+            return nil
+        }
+
+        let pageURL = resourceDirectoryURL
+            .appendingPathComponent(pagePath, isDirectory: false)
+            .standardizedFileURL
+        let resourceDirectoryPath = resourceDirectoryURL.standardizedFileURL.path
+        guard pageURL.path.hasPrefix(resourceDirectoryPath + "/") else {
+            throw QuartzWebExtensionSupportError.sandboxedExtensionPageUnavailable(pagePath)
+        }
+
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: pageURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue == false
+        else {
+            throw QuartzWebExtensionSupportError.sandboxedExtensionPageUnavailable(pagePath)
+        }
+
+        return (pageURL, resourceDirectoryURL)
+    }
+
+    private func installedPath(for context: WKWebExtensionContext) -> String? {
+        extensionContextsByPath.first { _, installedContext in
+            installedContext === context
+        }?.key
+    }
+
+    private func localResourceDirectory(for sourceURL: URL) throws -> URL {
+        var isDirectory = ObjCBool(false)
+
+        guard FileManager.default.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory) else {
+            throw QuartzWebExtensionSupportError.missingExtensionSource(sourceURL.lastPathComponent)
+        }
+
+        if isDirectory.boolValue {
+            return try extensionRootDirectory(for: sourceURL)
+        }
+
+        guard sourceURL.pathExtension.lowercased() == "zip" else {
+            throw QuartzWebExtensionSupportError.unsupportedExtensionSource
+        }
+
+        return try extractedSandboxResourceDirectory(for: sourceURL)
+    }
+
+    private func extractedSandboxResourceDirectory(for archiveURL: URL) throws -> URL {
+        let cacheDirectoryURL = try sandboxedExtensionPagesDirectory()
+        let signature = try archiveSignature(for: archiveURL)
+        let destinationURL = cacheDirectoryURL.appendingPathComponent(signature, isDirectory: true)
+
+        if let resourceDirectoryURL = try? extensionRootDirectory(for: destinationURL) {
+            return resourceDirectoryURL
+        }
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        try extractArchive(at: archiveURL, to: destinationURL)
+        return try extensionRootDirectory(for: destinationURL)
+    }
+
+    private func extractArchive(at archiveURL: URL, to destinationURL: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-x", "-k", archiveURL.path, destinationURL.path]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw QuartzWebExtensionSupportError.sandboxedExtensionPageUnavailable(archiveURL.lastPathComponent)
+        }
+    }
+
+    private func archiveSignature(for archiveURL: URL) throws -> String {
+        let values = try archiveURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let modifiedAt = Int(values.contentModificationDate?.timeIntervalSince1970 ?? 0)
+        let size = values.fileSize ?? 0
+        let rawSignature = "\(archiveURL.deletingPathExtension().lastPathComponent)-\(size)-\(modifiedAt)"
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let scalars = rawSignature.unicodeScalars.map { scalar in
+            allowedCharacters.contains(scalar) ? scalar : UnicodeScalar("-")
+        }
+
+        let signature = String(String.UnicodeScalarView(scalars))
+        return signature.isEmpty ? "extension-\(size)-\(modifiedAt)" : signature
+    }
+
+    private func sandboxPagePaths(in resourceDirectoryURL: URL) throws -> Set<String> {
+        let manifestURL = resourceDirectoryURL.appendingPathComponent("manifest.json", isDirectory: false)
+        let data = try Data(contentsOf: manifestURL)
+        guard let manifest = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sandbox = manifest["sandbox"] as? [String: Any],
+              let pages = sandbox["pages"] as? [String]
+        else {
+            return []
+        }
+
+        return Set(pages.map(normalizedExtensionResourcePath).filter { $0.isEmpty == false })
+    }
+
+    private func normalizedExtensionResourcePath(_ path: String) -> String {
+        var trimmedPath = path.removingPercentEncoding ?? path
+        while trimmedPath.hasPrefix("/") {
+            trimmedPath.removeFirst()
+        }
+
+        return trimmedPath
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .joined(separator: "/")
+    }
+
+    private func openURLFromExtension(_ url: URL, context: WKWebExtensionContext) {
+        let owningContext = controller.extensionContext(for: url) ?? context
+
+        do {
+            if let sandboxedPage = try sandboxedExtensionPage(for: url, context: owningContext) {
+                browser?.loadSandboxedExtensionPage(
+                    sandboxedPage.pageURL,
+                    from: sandboxedPage.readAccessURL,
+                    displayURL: url
+                )
+                return
+            }
+        } catch {
+            print("Quartz sandboxed extension page unavailable: \(error.localizedDescription)")
+        }
+
+        if let configuration = owningContext.webViewConfiguration {
+            browser?.loadExtensionPage(url, using: configuration)
+        } else {
+            browser?.loadFromExtension(url)
+        }
+    }
+
     private func summary(for context: WKWebExtensionContext, wasAlreadyLoaded: Bool) -> String {
-        let name = context.webExtension.displayName ?? context.webExtension.displayShortName ?? "Extension"
+        let name = displayName(for: context)
         let versionText = context.webExtension.version.map { " \($0)" } ?? ""
         let stateText = wasAlreadyLoaded ? "is already installed" : "was installed"
         return "\(name)\(versionText) \(stateText)."
@@ -431,7 +666,7 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         completionHandler: @escaping ((any WKWebExtensionTab)?, Error?) -> Void
     ) {
         if let url = configuration.url {
-            browser?.loadFromExtension(url)
+            openURLFromExtension(url, context: extensionContext)
         }
 
         completionHandler(self, nil)
@@ -443,7 +678,7 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         completionHandler: @escaping (Error?) -> Void
     ) {
         if let url = extensionContext.optionsPageURL {
-            browser?.loadFromExtension(url)
+            openURLFromExtension(url, context: extensionContext)
             completionHandler(nil)
         } else {
             completionHandler(QuartzWebExtensionSupportError.missingOptionsPage)
@@ -476,12 +711,14 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         for context: WKWebExtensionContext,
         completionHandler: @escaping (Error?) -> Void
     ) {
-        guard let popover = action.popupPopover, let button = browser?.extensionWebView else {
+        guard let popover = action.popupPopover,
+              let anchorView = browser?.extensionPopupAnchorView ?? browser?.extensionWebView
+        else {
             completionHandler(QuartzWebExtensionSupportError.missingPopup)
             return
         }
 
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+        popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .maxY)
         completionHandler(nil)
     }
 }
@@ -526,11 +763,19 @@ extension QuartzWebExtensionSupport: WKWebExtensionTab {
     func pendingURL(for context: WKWebExtensionContext) -> URL? {
         nil
     }
+
+    func loadURL(_ url: URL, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
+        openURLFromExtension(url, context: context)
+        completionHandler(nil)
+    }
 }
 
 private enum QuartzWebExtensionSupportError: LocalizedError {
     case missingOptionsPage
     case missingPopup
+    case missingInstalledExtension
+    case missingAction(String)
+    case disabledAction(String)
     case unsupportedExtensionSource
     case missingExtensionSource(String)
     case missingManifest(String)
@@ -538,6 +783,7 @@ private enum QuartzWebExtensionSupportError: LocalizedError {
     case applicationSupportUnavailable
     case invalidChromeWebStoreReference
     case chromeWebStoreDownloadFailed(Int?)
+    case sandboxedExtensionPageUnavailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -545,6 +791,12 @@ private enum QuartzWebExtensionSupportError: LocalizedError {
             "The extension does not provide an options page."
         case .missingPopup:
             "The extension does not provide a popup that Quartz can display."
+        case .missingInstalledExtension:
+            "Quartz could not find that installed extension."
+        case .missingAction(let extensionName):
+            "\(extensionName) does not provide a toolbar action."
+        case .disabledAction(let extensionName):
+            "\(extensionName) is unavailable on this page."
         case .unsupportedExtensionSource:
             "Choose an unpacked Chromium extension folder, .zip archive, or .crx package."
         case .missingExtensionSource(let sourceName):
@@ -563,6 +815,8 @@ private enum QuartzWebExtensionSupportError: LocalizedError {
             } else {
                 "Quartz could not download that extension from the Chrome Web Store."
             }
+        case .sandboxedExtensionPageUnavailable(let page):
+            "Quartz could not prepare the sandboxed extension page \(page)."
         }
     }
 }

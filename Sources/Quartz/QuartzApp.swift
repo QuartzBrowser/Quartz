@@ -18,11 +18,12 @@ struct QuartzApp {
 }
 
 @MainActor
-final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSTextFieldDelegate {
+final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, NSTextFieldDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var webExtensionSupport: AnyObject?
     private var didStart = false
+    private var sessionURL: URL?
 
     private let addressField = NSTextField()
     private let backButton = BrowserController.makeIconButton(symbolName: "chevron.left", description: "Back")
@@ -39,6 +40,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     private var isReaderModeActive = false
 
     private let homeURL = URL(string: "https://www.example.com")!
+    private static let savedSessionURLKey = "Quartz.savedSession.url"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         start()
@@ -53,15 +55,24 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
 
         buildMenu()
         buildWindow()
-        loadSavedExtensionsThenLoadHome()
+        loadSavedExtensionsThenRestoreSession()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        saveCurrentSession()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        saveCurrentSession()
+    }
+
     private func buildWindow() {
         let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = WKWebsiteDataStore.default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         let userContentController = WKUserContentController()
         configuration.userContentController = userContentController
@@ -144,6 +155,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
             defer: false
         )
         window.title = "Quartz"
+        window.delegate = self
         window.center()
         window.minSize = NSSize(width: 520, height: 360)
         window.contentView = container
@@ -392,7 +404,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         alert.runModal()
     }
 
-    private func loadSavedExtensionsThenLoadHome() {
+    private func loadSavedExtensionsThenRestoreSession() {
         addressField.stringValue = "Preparing content filters..."
         adBlockerButton.isEnabled = false
         adBlockerMenuItem?.isEnabled = false
@@ -408,11 +420,11 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
             }
 
             self.updateAdBlockerControls()
-            self.loadSavedExtensionsThenLoadHomeAfterContentFilters()
+            self.loadSavedExtensionsThenRestoreSessionAfterContentFilters()
         }
     }
 
-    private func loadSavedExtensionsThenLoadHomeAfterContentFilters() {
+    private func loadSavedExtensionsThenRestoreSessionAfterContentFilters() {
         if #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport {
             addressField.stringValue = "Loading extensions..."
             extensionsButton.isEnabled = false
@@ -423,12 +435,12 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
                 }
 
                 self.updateExtensionsButton()
-                self.load(self.homeURL)
+                self.restoreSession()
             }
             return
         }
 
-        load(homeURL)
+        restoreSession()
     }
 
     private func updateAdBlockerControls() {
@@ -487,6 +499,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
     }
 
     private func load(_ url: URL) {
+        sessionURL = url
         addressField.stringValue = url.absoluteString
 
         if url.isFileURL {
@@ -496,6 +509,40 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
         }
 
         updateControls()
+    }
+
+    private func restoreSession() {
+        load(restoredSessionURL() ?? homeURL)
+    }
+
+    private func saveCurrentSession() {
+        guard let url = webView?.url ?? sessionURL,
+              Self.isRestorableSessionURL(url)
+        else {
+            return
+        }
+
+        UserDefaults.standard.set(url.absoluteString, forKey: Self.savedSessionURLKey)
+        _ = UserDefaults.standard.synchronize()
+    }
+
+    private func restoredSessionURL() -> URL? {
+        guard let savedValue = UserDefaults.standard.string(forKey: Self.savedSessionURLKey),
+              let url = URL(string: savedValue),
+              Self.isRestorableSessionURL(url)
+        else {
+            return nil
+        }
+
+        return url
+    }
+
+    private static func isRestorableSessionURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else {
+            return false
+        }
+
+        return ["http", "https", "file"].contains(scheme)
     }
 
     private func normalizedURL(from text: String) -> URL? {
@@ -642,6 +689,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, WKNavigationDele
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let url = webView.url {
+            sessionURL = url
             addressField.stringValue = url.absoluteString
         }
         window.title = webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz"

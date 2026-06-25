@@ -5,10 +5,14 @@ import WebKit
 @main
 struct QuartzApp {
     @MainActor
+    private static var browserController: BrowserController?
+
+    @MainActor
     static func main() {
         let app = NSApplication.shared
         let delegate = BrowserController()
 
+        browserController = delegate
         app.delegate = delegate
         app.setActivationPolicy(.regular)
         delegate.start()
@@ -20,7 +24,11 @@ struct QuartzApp {
 @MainActor
 final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, NSTextFieldDelegate {
     private var window: NSWindow!
+    private var webContentView: NSView!
+    private var standardWebView: WKWebView!
     private var webView: WKWebView!
+    private var activeWebViewConstraints = [NSLayoutConstraint]()
+    private var displayURLOverride: URL?
     private var webExtensionSupport: AnyObject?
     private var didStart = false
     private var sessionURL: URL?
@@ -45,11 +53,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var installCurrentChromeWebStoreExtensionMenuItem: NSMenuItem?
     private var installExtensionMenuItem: NSMenuItem?
     private var installChromeWebStoreExtensionMenuItem: NSMenuItem?
+    private weak var extensionActionPopupAnchorView: NSView?
     private var isInstallingExtension = false
     private var isReaderModeActive = false
 
     private let homeURL = URL(string: "https://www.example.com")!
     private static let savedSessionURLKey = "Quartz.savedSession.url"
+    private static let sandboxedExtensionPageScheme = "quartz-extension-sandbox"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         start()
@@ -93,9 +103,9 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             webExtensionSupport = support
         }
 
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
+        let initialWebView = makeWebView(configuration: configuration)
+        standardWebView = initialWebView
+        webView = initialWebView
 
         addressField.placeholderString = "Search or enter website name"
         addressField.target = self
@@ -116,7 +126,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         configure(button: homeButton, action: #selector(goHome(_:)))
         configure(button: adBlockerButton, action: #selector(toggleAdBlocker(_:)))
         configure(button: readerButton, action: #selector(toggleReaderMode(_:)))
-        configure(button: extensionsButton, action: #selector(showExtensionStatus(_:)))
+        configure(button: extensionsButton, action: #selector(showExtensionsMenu(_:)))
         configure(button: webStoreInstallButton, action: #selector(installCurrentChromeWebStoreExtension(_:)))
         webStoreInstallButton.isHidden = true
         updateAdBlockerControls()
@@ -144,9 +154,11 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
-        webView.translatesAutoresizingMaskIntoConstraints = false
+        webContentView = NSView()
+        webContentView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(toolbar)
-        container.addSubview(webView)
+        container.addSubview(webContentView)
+        embed(webView: initialWebView)
 
         NSLayoutConstraint.activate([
             toolbar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -155,10 +167,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
             addressField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
 
-            webView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
-            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            webContentView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            webContentView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webContentView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webContentView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
 
         window = NSWindow(
@@ -309,6 +321,39 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         button.action = action
     }
 
+    private func makeWebView(configuration: WKWebViewConfiguration) -> WKWebView {
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+        return webView
+    }
+
+    private func embed(webView: WKWebView) {
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        webContentView.addSubview(webView)
+
+        activeWebViewConstraints = [
+            webView.topAnchor.constraint(equalTo: webContentView.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: webContentView.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: webContentView.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: webContentView.bottomAnchor)
+        ]
+        NSLayoutConstraint.activate(activeWebViewConstraints)
+    }
+
+    private func switchActiveWebView(to newWebView: WKWebView) {
+        guard webView !== newWebView else {
+            return
+        }
+
+        NSLayoutConstraint.deactivate(activeWebViewConstraints)
+        webView.removeFromSuperview()
+        webView = newWebView
+        webView.navigationDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+        embed(webView: newWebView)
+    }
+
     @objc private func addressSubmitted(_ sender: Any?) {
         guard let url = normalizedURL(from: addressField.stringValue) else {
             return
@@ -442,6 +487,107 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
 
         installChromeWebStoreExtension(reference: reference, support: support)
+    }
+
+    @objc private func showExtensionsMenu(_ sender: Any?) {
+        guard #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport else {
+            showExtensionsUnavailableAlert()
+            return
+        }
+
+        let anchorView = sender as? NSView ?? extensionsButton
+        extensionActionPopupAnchorView = anchorView
+
+        let menu = makeExtensionsMenu(support: support)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchorView.bounds.height + 2), in: anchorView)
+    }
+
+    @available(macOS 15.4, *)
+    private func makeExtensionsMenu(support: QuartzWebExtensionSupport) -> NSMenu {
+        let menu = NSMenu(title: "Extensions")
+        let installedExtensions = support.installedExtensions
+
+        if installedExtensions.isEmpty {
+            let item = NSMenuItem(title: "No Extensions Installed", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        } else {
+            for installedExtension in installedExtensions {
+                menu.addItem(extensionMenuItem(for: installedExtension))
+            }
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(makeMenuItem(
+            title: "Install This Web Store Extension",
+            action: #selector(installCurrentChromeWebStoreExtension(_:)),
+            isEnabled: !isInstallingExtension && currentChromeWebStoreExtensionReference != nil
+        ))
+        menu.addItem(makeMenuItem(
+            title: "Install from Chrome Web Store...",
+            action: #selector(installExtensionFromChromeWebStore(_:)),
+            isEnabled: !isInstallingExtension
+        ))
+        menu.addItem(makeMenuItem(
+            title: "Install Extension from File...",
+            action: #selector(installExtension(_:)),
+            isEnabled: !isInstallingExtension
+        ))
+        menu.addItem(.separator())
+        menu.addItem(makeMenuItem(title: "Extension Status", action: #selector(showExtensionStatus(_:))))
+
+        return menu
+    }
+
+    @available(macOS 15.4, *)
+    private func extensionMenuItem(for installedExtension: QuartzInstalledWebExtension) -> NSMenuItem {
+        let title = installedExtension.badgeText.isEmpty
+            ? installedExtension.displayName
+            : "\(installedExtension.displayName) (\(installedExtension.badgeText))"
+        let item = makeMenuItem(
+            title: title,
+            action: #selector(performInstalledExtensionAction(_:)),
+            isEnabled: installedExtension.isActionEnabled
+        )
+        item.representedObject = installedExtension.identifier
+        item.toolTip = installedExtension.isActionEnabled
+            ? installedExtension.actionLabel
+            : "\(installedExtension.displayName) is unavailable on this page."
+
+        if let icon = installedExtension.icon?.copy() as? NSImage {
+            icon.size = NSSize(width: 18, height: 18)
+            item.image = icon
+        }
+
+        return item
+    }
+
+    private func makeMenuItem(title: String, action: Selector, isEnabled: Bool = true) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = isEnabled
+        return item
+    }
+
+    @objc private func performInstalledExtensionAction(_ sender: Any?) {
+        guard #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport else {
+            showExtensionsUnavailableAlert()
+            return
+        }
+
+        guard let item = sender as? NSMenuItem,
+              let identifier = item.representedObject as? String
+        else {
+            return
+        }
+
+        extensionActionPopupAnchorView = extensionsButton
+
+        do {
+            try support.performAction(forInstalledExtensionWithIdentifier: identifier)
+        } catch {
+            showExtensionAlert(title: "Extension Could Not Be Used", message: error.localizedDescription)
+        }
     }
 
     @available(macOS 15.4, *)
@@ -683,6 +829,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         webView
     }
 
+    var extensionPopupAnchorView: NSView? {
+        extensionActionPopupAnchorView ?? extensionsButton
+    }
+
     var extensionWindow: NSWindow? {
         window
     }
@@ -691,7 +841,44 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         load(url)
     }
 
+    func loadSandboxedExtensionPage(_ url: URL, from resourceRootURL: URL, displayURL: URL) {
+        guard let sandboxURL = Self.sandboxedExtensionPageURL(for: url, in: resourceRootURL) else {
+            load(displayURL)
+            return
+        }
+
+        displayURLOverride = displayURL
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = WKWebsiteDataStore.default()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.setURLSchemeHandler(
+            QuartzSandboxedExtensionSchemeHandler(resourceRootURL: resourceRootURL),
+            forURLScheme: Self.sandboxedExtensionPageScheme
+        )
+
+        let sandboxedWebView = makeWebView(configuration: configuration)
+        switchActiveWebView(to: sandboxedWebView)
+
+        sessionURL = displayURL
+        addressField.stringValue = displayURL.absoluteString
+        webView.load(URLRequest(url: sandboxURL))
+        updateControls()
+    }
+
+    func loadExtensionPage(_ url: URL, using configuration: WKWebViewConfiguration) {
+        let extensionWebView = makeWebView(configuration: configuration)
+        switchActiveWebView(to: extensionWebView)
+        load(url)
+    }
+
     private func load(_ url: URL) {
+        displayURLOverride = nil
+
+        if Self.isStandardBrowsingURL(url), webView !== standardWebView {
+            switchActiveWebView(to: standardWebView)
+        }
+
         sessionURL = url
         addressField.stringValue = url.absoluteString
 
@@ -735,7 +922,35 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             return false
         }
 
-        return ["http", "https", "file"].contains(scheme)
+        return isStandardBrowsingScheme(scheme)
+    }
+
+    private static func isStandardBrowsingURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else {
+            return false
+        }
+
+        return isStandardBrowsingScheme(scheme)
+    }
+
+    private static func isStandardBrowsingScheme(_ scheme: String) -> Bool {
+        ["http", "https", "file"].contains(scheme)
+    }
+
+    private static func sandboxedExtensionPageURL(for pageURL: URL, in resourceRootURL: URL) -> URL? {
+        let standardizedPageURL = pageURL.standardizedFileURL
+        let standardizedRootURL = resourceRootURL.standardizedFileURL
+        let rootPath = standardizedRootURL.path
+        guard standardizedPageURL.path.hasPrefix(rootPath + "/") else {
+            return nil
+        }
+
+        let relativePath = String(standardizedPageURL.path.dropFirst(rootPath.count + 1))
+        var components = URLComponents()
+        components.scheme = sandboxedExtensionPageScheme
+        components.host = "extension"
+        components.path = "/" + relativePath
+        return components.url
     }
 
     private func normalizedURL(from text: String) -> URL? {
@@ -884,8 +1099,9 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let url = webView.url {
-            sessionURL = url
-            addressField.stringValue = url.absoluteString
+            let displayURL = displayURLOverride ?? url
+            sessionURL = displayURL
+            addressField.stringValue = displayURL.absoluteString
         }
         window.title = webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz"
         updateControls()

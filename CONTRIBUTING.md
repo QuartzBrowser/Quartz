@@ -69,6 +69,18 @@ In the pull request description, include:
 - How you tested it
 - Any follow-up work or known limitations
 
+## Releases
+
+Quartz uses release-please to prepare changelogs, version bumps, tags, GitHub
+releases, and release archives from commits merged into `main`.
+
+Use Conventional Commit titles for squash merges so release-please can classify
+changes:
+
+- `fix: describe the bug fix` for patch releases
+- `feat: describe the user-facing feature` for minor releases
+- `feat!: describe the breaking change` for major releases
+
 ## Style
 
 - Prefer small, readable AppKit/WebKit changes over broad rewrites.

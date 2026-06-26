@@ -23,7 +23,12 @@ final class QuartzWebExtensionSupport: NSObject {
     private let installedExtensionsDirectoryName = "Extensions"
     private let chromeWebStoreDownloadDirectoryName = "ChromeWebStoreDownloads"
     private let sandboxedExtensionPagesDirectoryName = "SandboxedExtensionPages"
-    private let chromeWebStoreUpdateURL = URL(string: "https://clients2.google.com/service/update2/crx")!
+    private var chromeWebStoreUpdateURL: URL {
+        guard let url = URL(string: "https://clients2.google.com/service/update2/crx") else {
+            fatalError("Invalid Chrome Web Store update URL constant.")
+        }
+        return url
+    }
 
     var installedExtensionNames: [String] {
         extensionContextsByPath.values

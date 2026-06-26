@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/QuartzBrowser/Quartz/compare/v0.4.3...v0.5.0) (2026-06-26)
+
+
+### Features
+
+* add Facet browser panel ([1eea196](https://github.com/QuartzBrowser/Quartz/commit/1eea1965a71a0b66747b028f0b9582a984d49bd7))
+
 ## [0.4.3](https://github.com/QuartzBrowser/Quartz/compare/v0.4.2...v0.4.3) (2026-06-26)
 
 

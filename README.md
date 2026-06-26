@@ -63,7 +63,7 @@ xcrun stapler staple dist/Quartz.app
 
 ## Facet
 
-Facet is a docked AI agent panel inside Quartz. Open it from the sparkles toolbar button or **View > Show Facet**, then ask a question. When **Current page** is enabled, Quartz sends the active page URL, title, selected text, description, and a bounded visible-text excerpt to Codex as context.
+Facet is a docked AI agent panel inside Quartz. Open it from the sparkles toolbar button or **View > Show Facet**, choose a Codex model and reasoning level if you want to override the defaults, then ask a question. When **Current page** is enabled, Quartz sends the active page URL, title, selected text, description, and a bounded visible-text excerpt to Codex as context.
 
 Facet uses the local `codex` CLI in read-only, non-interactive mode. Make sure `codex` is installed and authenticated before using it in Quartz.
 

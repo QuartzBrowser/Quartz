@@ -25,9 +25,44 @@ struct FacetCodexResult: Sendable {
     }
 }
 
+struct FacetCodexModelOption: Sendable, Equatable {
+    let slug: String
+    let displayName: String
+
+    var menuTitle: String {
+        displayName == slug ? slug : "\(displayName) (\(slug))"
+    }
+
+    static let fallbackOptions = [
+        FacetCodexModelOption(slug: "gpt-5.5", displayName: "GPT-5.5"),
+        FacetCodexModelOption(slug: "gpt-5.4", displayName: "GPT-5.4"),
+        FacetCodexModelOption(slug: "gpt-5.4-mini", displayName: "GPT-5.4-Mini"),
+        FacetCodexModelOption(slug: "gpt-5.3-codex", displayName: "GPT-5.3 Codex"),
+        FacetCodexModelOption(slug: "gpt-5.2", displayName: "GPT-5.2")
+    ]
+}
+
+struct FacetCodexConfiguration: Sendable, Equatable {
+    let model: String?
+    let reasoningEffort: String?
+
+    var modelArgument: String? {
+        clean(model)
+    }
+
+    var reasoningEffortArgument: String? {
+        clean(reasoningEffort)
+    }
+
+    private func clean(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 @MainActor
 protocol FacetPanelViewDelegate: AnyObject {
-    func facetPanel(_ panel: FacetPanelView, didSubmit prompt: String, includePageContext: Bool)
+    func facetPanel(_ panel: FacetPanelView, didSubmit prompt: String, includePageContext: Bool, configuration: FacetCodexConfiguration)
     func facetPanelDidRequestCancel(_ panel: FacetPanelView)
     func facetPanelDidRequestClose(_ panel: FacetPanelView)
 }
@@ -41,6 +76,8 @@ final class FacetPanelView: NSView {
     private let transcriptTextView = NSTextView()
     private let promptField = NSTextField()
     private let includePageCheckbox = NSButton(checkboxWithTitle: "Current page", target: nil, action: nil)
+    private let modelPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let reasoningPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sendButton = FacetPanelView.makeCommandButton(
         title: "Send",
         symbolName: "paperplane.fill",
@@ -54,6 +91,19 @@ final class FacetPanelView: NSView {
     private let closeButton = FacetPanelView.makeIconButton(symbolName: "xmark", description: "Hide Facet")
 
     private(set) var isRunning = false
+
+    private enum PreferenceKeys {
+        static let model = "Facet.codex.model"
+        static let reasoningEffort = "Facet.codex.reasoningEffort"
+    }
+
+    private let reasoningOptions = [
+        (title: "Default", value: ""),
+        (title: "Low", value: "low"),
+        (title: "Medium", value: "medium"),
+        (title: "High", value: "high"),
+        (title: "Extra High", value: "xhigh")
+    ]
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -88,6 +138,32 @@ final class FacetPanelView: NSView {
         sendButton.isHidden = running
         stopButton.isHidden = !running
         includePageCheckbox.isEnabled = !running
+        modelPopup.isEnabled = !running
+        reasoningPopup.isEnabled = !running
+    }
+
+    func setModelOptions(_ options: [FacetCodexModelOption]) {
+        let selectedModel = currentModelSlug() ?? UserDefaults.standard.string(forKey: PreferenceKeys.model)
+        let uniqueOptions = Self.uniqueModelOptions(options)
+
+        modelPopup.removeAllItems()
+        addItem(to: modelPopup, title: "Default", value: "")
+
+        if uniqueOptions.isEmpty == false {
+            modelPopup.menu?.addItem(.separator())
+        }
+
+        for option in uniqueOptions {
+            addItem(to: modelPopup, title: option.menuTitle, value: option.slug)
+        }
+
+        if let selectedModel,
+           selectedModel.isEmpty == false,
+           uniqueOptions.contains(where: { $0.slug == selectedModel }) == false {
+            addItem(to: modelPopup, title: selectedModel, value: selectedModel)
+        }
+
+        selectItem(in: modelPopup, value: selectedModel ?? "")
     }
 
     private func buildView() {
@@ -137,6 +213,31 @@ final class FacetPanelView: NSView {
         includePageCheckbox.state = .on
         includePageCheckbox.font = .systemFont(ofSize: 12)
 
+        configurePopup(modelPopup, description: "Codex model")
+        setModelOptions(FacetCodexModelOption.fallbackOptions)
+
+        configurePopup(reasoningPopup, description: "Codex reasoning level")
+        for option in reasoningOptions {
+            addItem(to: reasoningPopup, title: option.title, value: option.value)
+        }
+        selectItem(
+            in: reasoningPopup,
+            value: UserDefaults.standard.string(forKey: PreferenceKeys.reasoningEffort) ?? ""
+        )
+
+        let modelLabel = FacetPanelView.makeSettingLabel("Model")
+        let reasoningLabel = FacetPanelView.makeSettingLabel("Reasoning")
+        let settingsGrid = NSGridView(views: [
+            [modelLabel, modelPopup],
+            [reasoningLabel, reasoningPopup]
+        ])
+        settingsGrid.column(at: 0).xPlacement = .trailing
+        settingsGrid.column(at: 1).xPlacement = .fill
+        settingsGrid.column(at: 1).width = 190
+        settingsGrid.rowSpacing = 6
+        settingsGrid.columnSpacing = 8
+        settingsGrid.translatesAutoresizingMaskIntoConstraints = false
+
         sendButton.target = self
         sendButton.action = #selector(sendPressed(_:))
         stopButton.target = self
@@ -149,7 +250,7 @@ final class FacetPanelView: NSView {
         actionRow.spacing = 8
         actionRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let content = NSStackView(views: [titleRow, transcriptScrollView, promptField, actionRow])
+        let content = NSStackView(views: [titleRow, transcriptScrollView, settingsGrid, promptField, actionRow])
         content.orientation = .vertical
         content.alignment = .width
         content.spacing = 10
@@ -200,6 +301,12 @@ final class FacetPanelView: NSView {
         submitPrompt()
     }
 
+    @objc private func settingChanged(_ sender: Any?) {
+        let configuration = currentConfiguration()
+        UserDefaults.standard.set(configuration.modelArgument ?? "", forKey: PreferenceKeys.model)
+        UserDefaults.standard.set(configuration.reasoningEffortArgument ?? "", forKey: PreferenceKeys.reasoningEffort)
+    }
+
     @objc private func stopPressed(_ sender: Any?) {
         delegate?.facetPanelDidRequestCancel(self)
     }
@@ -219,7 +326,50 @@ final class FacetPanelView: NSView {
         }
 
         promptField.stringValue = ""
-        delegate?.facetPanel(self, didSubmit: prompt, includePageContext: includePageCheckbox.state == .on)
+        settingChanged(nil)
+        delegate?.facetPanel(
+            self,
+            didSubmit: prompt,
+            includePageContext: includePageCheckbox.state == .on,
+            configuration: currentConfiguration()
+        )
+    }
+
+    private func configurePopup(_ popup: NSPopUpButton, description: String) {
+        popup.controlSize = .small
+        popup.font = .systemFont(ofSize: 12)
+        popup.target = self
+        popup.action = #selector(settingChanged(_:))
+        popup.toolTip = description
+    }
+
+    private func currentConfiguration() -> FacetCodexConfiguration {
+        FacetCodexConfiguration(
+            model: currentModelSlug(),
+            reasoningEffort: selectedValue(in: reasoningPopup)
+        )
+    }
+
+    private func currentModelSlug() -> String? {
+        selectedValue(in: modelPopup)
+    }
+
+    private func selectedValue(in popup: NSPopUpButton) -> String? {
+        popup.selectedItem?.representedObject as? String
+    }
+
+    private func addItem(to popup: NSPopUpButton, title: String, value: String) {
+        popup.addItem(withTitle: title)
+        popup.lastItem?.representedObject = value
+    }
+
+    private func selectItem(in popup: NSPopUpButton, value: String) {
+        guard let item = popup.itemArray.first(where: { ($0.representedObject as? String) == value }) else {
+            popup.selectItem(at: 0)
+            return
+        }
+
+        popup.select(item)
     }
 
     private static func makeIconButton(symbolName: String, description: String) -> NSButton {
@@ -241,6 +391,26 @@ final class FacetPanelView: NSView {
         button.toolTip = description
         return button
     }
+
+    private static func makeSettingLabel(_ title: String) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .right
+        return label
+    }
+
+    private static func uniqueModelOptions(_ options: [FacetCodexModelOption]) -> [FacetCodexModelOption] {
+        var seen = Set<String>()
+        return options.filter { option in
+            guard seen.contains(option.slug) == false else {
+                return false
+            }
+
+            seen.insert(option.slug)
+            return true
+        }
+    }
 }
 
 final class FacetCodexRunner: @unchecked Sendable {
@@ -248,11 +418,19 @@ final class FacetCodexRunner: @unchecked Sendable {
     private let lock = NSLock()
     private var activeProcess: Process?
 
-    func run(prompt: String) async -> FacetCodexResult {
+    func run(prompt: String, configuration: FacetCodexConfiguration) async -> FacetCodexResult {
         await withCheckedContinuation { continuation in
-            queue.async { [self, prompt, continuation] in
-                let result = runSynchronously(prompt: prompt)
+            queue.async { [self, prompt, configuration, continuation] in
+                let result = runSynchronously(prompt: prompt, configuration: configuration)
                 continuation.resume(returning: result)
+            }
+        }
+    }
+
+    func loadModelOptions() async -> [FacetCodexModelOption] {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: Self.loadModelOptionsSynchronously())
             }
         }
     }
@@ -265,7 +443,7 @@ final class FacetCodexRunner: @unchecked Sendable {
         process?.terminate()
     }
 
-    private func runSynchronously(prompt: String) -> FacetCodexResult {
+    private func runSynchronously(prompt: String, configuration: FacetCodexConfiguration) -> FacetCodexResult {
         guard let executableURL = Self.codexExecutableURL() else {
             return FacetCodexResult(
                 output: "Facet could not find the Codex CLI. Install Codex or make sure the `codex` command is available at ~/.local/bin/codex, /opt/homebrew/bin/codex, /usr/local/bin/codex, or on PATH.",
@@ -278,9 +456,17 @@ final class FacetCodexRunner: @unchecked Sendable {
         process.executableURL = executableURL
         let lastMessageURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("facet-codex-\(UUID().uuidString).txt", isDirectory: false)
-        process.arguments = [
+        var arguments = [
             "--ask-for-approval",
-            "never",
+            "never"
+        ]
+        if let model = configuration.modelArgument {
+            arguments.append(contentsOf: ["--model", model])
+        }
+        if let reasoningEffort = configuration.reasoningEffortArgument {
+            arguments.append(contentsOf: ["--config", "model_reasoning_effort=\"\(reasoningEffort)\""])
+        }
+        arguments.append(contentsOf: [
             "exec",
             "--ephemeral",
             "--skip-git-repo-check",
@@ -293,7 +479,8 @@ final class FacetCodexRunner: @unchecked Sendable {
             "-C",
             FileManager.default.homeDirectoryForCurrentUser.path,
             "-"
-        ]
+        ])
+        process.arguments = arguments
 
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = environment["TERM"] ?? "dumb"
@@ -380,5 +567,59 @@ final class FacetCodexRunner: @unchecked Sendable {
         }
 
         return nil
+    }
+
+    private static func loadModelOptionsSynchronously() -> [FacetCodexModelOption] {
+        guard let executableURL = codexExecutableURL() else {
+            return FacetCodexModelOption.fallbackOptions
+        }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["debug", "models", "--bundled"]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+
+            guard process.terminationStatus == 0 else {
+                return FacetCodexModelOption.fallbackOptions
+            }
+
+            let catalog = try JSONDecoder().decode(CodexModelCatalog.self, from: outputData)
+            let options = catalog.models
+                .filter { $0.visibility == "list" }
+                .map {
+                    FacetCodexModelOption(
+                        slug: $0.slug,
+                        displayName: $0.displayName?.isEmpty == false ? $0.displayName! : $0.slug
+                    )
+                }
+
+            return options.isEmpty ? FacetCodexModelOption.fallbackOptions : options
+        } catch {
+            return FacetCodexModelOption.fallbackOptions
+        }
+    }
+
+    private struct CodexModelCatalog: Decodable {
+        let models: [CodexModelRecord]
+    }
+
+    private struct CodexModelRecord: Decodable {
+        let slug: String
+        let displayName: String?
+        let visibility: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case slug
+            case displayName = "display_name"
+            case visibility
+        }
     }
 }

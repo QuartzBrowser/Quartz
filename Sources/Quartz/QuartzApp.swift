@@ -35,6 +35,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let facetRunner = FacetCodexRunner()
     private var activeFacetTask: Task<Void, Never>?
     private var activeFacetRequestID: UUID?
+    private var facetModelOptionsTask: Task<Void, Never>?
     private var facetMessages = [(role: String, content: String)]()
     private var didStart = false
     private var sessionURL: URL?
@@ -92,6 +93,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     func applicationWillTerminate(_ notification: Notification) {
         activeFacetTask?.cancel()
+        facetModelOptionsTask?.cancel()
         facetRunner.cancel()
         saveCurrentSession()
     }
@@ -176,6 +178,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         facetPanelView.isHidden = true
         facetPanelView.translatesAutoresizingMaskIntoConstraints = false
         facetPanelWidthConstraint = facetPanelView.widthAnchor.constraint(equalToConstant: 0)
+        loadFacetModelOptions()
         container.addSubview(toolbar)
         container.addSubview(contentContainer)
         contentContainer.addSubview(webContentView)
@@ -1162,7 +1165,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         alert.runModal()
     }
 
-    func facetPanel(_ panel: FacetPanelView, didSubmit prompt: String, includePageContext: Bool) {
+    func facetPanel(_ panel: FacetPanelView, didSubmit prompt: String, includePageContext: Bool, configuration: FacetCodexConfiguration) {
         let requestID = UUID()
         activeFacetRequestID = requestID
         facetMessages.append((role: "User", content: prompt))
@@ -1180,11 +1183,17 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
                 self.startFacetCodexRun(
                     requestID: requestID,
                     userPrompt: prompt,
-                    pageContext: pageContext
+                    pageContext: pageContext,
+                    configuration: configuration
                 )
             }
         } else {
-            startFacetCodexRun(requestID: requestID, userPrompt: prompt, pageContext: nil)
+            startFacetCodexRun(
+                requestID: requestID,
+                userPrompt: prompt,
+                pageContext: nil,
+                configuration: configuration
+            )
         }
     }
 
@@ -1201,7 +1210,12 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         setFacetPanelVisible(false)
     }
 
-    private func startFacetCodexRun(requestID: UUID, userPrompt: String, pageContext: FacetPageContext?) {
+    private func startFacetCodexRun(
+        requestID: UUID,
+        userPrompt: String,
+        pageContext: FacetPageContext?,
+        configuration: FacetCodexConfiguration
+    ) {
         let codexPrompt = facetCodexPrompt(
             userPrompt: userPrompt,
             pageContext: pageContext,
@@ -1213,7 +1227,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
                 return
             }
 
-            let result = await self.facetRunner.run(prompt: codexPrompt)
+            let result = await self.facetRunner.run(prompt: codexPrompt, configuration: configuration)
             guard Task.isCancelled == false,
                   self.activeFacetRequestID == requestID
             else {
@@ -1239,6 +1253,22 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
                     : "Codex CLI exited with status \(result.exitStatus).\n\(result.output)"
                 self.facetPanelView.appendSystemMessage(message)
             }
+        }
+    }
+
+    private func loadFacetModelOptions() {
+        facetModelOptionsTask?.cancel()
+        facetModelOptionsTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let options = await self.facetRunner.loadModelOptions()
+            guard Task.isCancelled == false else {
+                return
+            }
+
+            self.facetPanelView.setModelOptions(options)
         }
     }
 

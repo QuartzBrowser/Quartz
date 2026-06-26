@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-As of now with new minor update versions coming out all the time at this time I just won't be maintaining any old versions as of now.
-
+Only the latest released version is supported for security updates.
+Any earlier versions are considered unsupported and will not receive security fixes.
 
 ## Reporting a Vulnerability
 

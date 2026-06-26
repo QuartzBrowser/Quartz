@@ -566,8 +566,9 @@ final class QuartzWebExtensionSupport: NSObject {
         let size = values.fileSize ?? 0
         let rawSignature = "\(archiveURL.deletingPathExtension().lastPathComponent)-\(size)-\(modifiedAt)"
         let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let fallbackScalar = "-".unicodeScalars.first!
         let scalars = rawSignature.unicodeScalars.map { scalar in
-            allowedCharacters.contains(scalar) ? scalar : UnicodeScalar("-")
+            allowedCharacters.contains(scalar) ? scalar : fallbackScalar
         }
 
         let signature = String(String.UnicodeScalarView(scalars))

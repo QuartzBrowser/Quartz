@@ -486,8 +486,14 @@ final class QuartzWebExtensionSupport: NSObject {
         let pageURL = resourceDirectoryURL
             .appendingPathComponent(pagePath, isDirectory: false)
             .standardizedFileURL
-        let resourceDirectoryPath = resourceDirectoryURL.standardizedFileURL.path
-        guard pageURL.path.hasPrefix(resourceDirectoryPath + "/") else {
+        let resolvedResourceDirectoryURL = resourceDirectoryURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let resolvedPageURL = pageURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let resourceDirectoryPath = resolvedResourceDirectoryURL.path
+        guard resolvedPageURL.path.hasPrefix(resourceDirectoryPath + "/") else {
             throw QuartzWebExtensionSupportError.sandboxedExtensionPageUnavailable(pagePath)
         }
 

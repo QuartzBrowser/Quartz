@@ -1,3 +1,14 @@
+## [0.4.3](https://github.com/QuartzBrowser/Quartz/compare/v0.4.2...v0.4.3) (2026-06-26)
+
+
+### Bug Fixes
+
+* **webextensions:** avoid force-unwrapping Web Store URL ([cd4ae6b](https://github.com/QuartzBrowser/Quartz/commit/cd4ae6b45ef996b626ec449d5bc1f212d2569982))
+* **webextensions:** normalize sandbox page paths before validation ([966900a](https://github.com/QuartzBrowser/Quartz/commit/966900ae5c47a03d33865c33286c8c37a7f803c9))
+* **webextensions:** read CRX integers as little endian ([5c036e6](https://github.com/QuartzBrowser/Quartz/commit/5c036e66a0f07654006afa5569bfbf0a4fff39c5))
+* **webextensions:** resolve symlinks for sandbox page checks ([83467db](https://github.com/QuartzBrowser/Quartz/commit/83467dbc5ba586cc8938d7bb12f847b90fdd5780))
+* **webextensions:** use fallback scalar for install signatures ([4e9a63d](https://github.com/QuartzBrowser/Quartz/commit/4e9a63dce663b018bebfd9348ba9a72451572cc7))
+
 # Changelog
 
 ## [0.4.2](https://github.com/QuartzBrowser/Quartz/compare/v0.4.1...v0.4.2) (2026-06-25)

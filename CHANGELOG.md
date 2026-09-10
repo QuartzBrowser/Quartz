@@ -1,3 +1,10 @@
+# [0.8.0](https://github.com/QuartzBrowser/Quartz/compare/v0.7.0...v0.8.0) (2026-09-10)
+
+
+### Features
+
+* **facet:** use OpenRouter for chat ([0730cbb](https://github.com/QuartzBrowser/Quartz/commit/0730cbbc7aa958251f332b19e11ec817f74af71a))
+
 # [0.7.0](https://github.com/QuartzBrowser/Quartz/compare/v0.6.0...v0.7.0) (2026-09-10)
 
 

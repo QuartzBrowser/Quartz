@@ -56,7 +56,7 @@ xcrun stapler staple dist/Quartz.app
 - Native local start page with direct access to search, Facet, and extensions
 - Tiny built-in ad blocker for obvious third-party ad resources
 - Reading mode for article-focused pages
-- Facet side-panel agent powered by the local Codex CLI
+- Facet side-panel assistant powered by OpenRouter
 - Optional Chromium-format WebExtension installation on macOS 15.4+, including Chrome Web Store downloads
 - Address/search field
 - Back, forward, reload, stop, home, reading, and Facet controls
@@ -68,9 +68,11 @@ When there is no saved browsing session, Quartz opens a self-contained local sta
 
 ## Facet
 
-Facet is a docked AI agent panel inside Quartz. Open it from the sparkles toolbar button or **View > Show Facet**, choose a Codex model and reasoning level if you want to override the defaults, then ask a question. When **Current page** is enabled, Quartz sends the active page URL, title, selected text, description, and a bounded visible-text excerpt to Codex as context.
+Facet is a docked AI assistant panel inside Quartz, powered by OpenRouter. Open it from the sparkles toolbar button or **View > Show Facet**. Create an [OpenRouter API key](https://openrouter.ai/settings/keys), enter it in the secure API key field, and click **Save** to store it in your macOS Keychain. **Remove** deletes the saved key. Facet can also use `OPENROUTER_API_KEY` from the environment that launches Quartz when no saved key is available.
 
-Facet uses the local `codex` CLI in read-only, non-interactive mode. Make sure `codex` is installed and authenticated before using it in Quartz.
+Choose an OpenRouter model and an optional reasoning level, then ask a question. The default model uses OpenRouter's automatic routing; the default reasoning option lets the model use its own settings. Available models and supported reasoning options depend on OpenRouter and the selected provider.
+
+Facet sends your prompt and recent conversation to OpenRouter and the selected model provider. When **Current page** is enabled, the request also includes the active page URL, title, selected text, description, and a bounded visible-text excerpt. Turn **Current page** off to omit that page context from future requests.
 
 ## Extensions
 

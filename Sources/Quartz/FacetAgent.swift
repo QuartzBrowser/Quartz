@@ -15,56 +15,12 @@ struct FacetPageContext: Sendable {
     }
 }
 
-struct FacetCodexResult: Sendable {
-    let output: String
-    let exitStatus: Int32
-    let wasCancelled: Bool
-
-    var didSucceed: Bool {
-        exitStatus == 0 && wasCancelled == false
-    }
-}
-
-struct FacetCodexModelOption: Sendable, Equatable {
-    let slug: String
-    let displayName: String
-
-    var menuTitle: String {
-        displayName == slug ? slug : "\(displayName) (\(slug))"
-    }
-
-    static let fallbackOptions = [
-        FacetCodexModelOption(slug: "gpt-5.5", displayName: "GPT-5.5"),
-        FacetCodexModelOption(slug: "gpt-5.4", displayName: "GPT-5.4"),
-        FacetCodexModelOption(slug: "gpt-5.4-mini", displayName: "GPT-5.4-Mini"),
-        FacetCodexModelOption(slug: "gpt-5.3-codex", displayName: "GPT-5.3 Codex"),
-        FacetCodexModelOption(slug: "gpt-5.2", displayName: "GPT-5.2")
-    ]
-}
-
-struct FacetCodexConfiguration: Sendable, Equatable {
-    let model: String?
-    let reasoningEffort: String?
-
-    var modelArgument: String? {
-        clean(model)
-    }
-
-    var reasoningEffortArgument: String? {
-        clean(reasoningEffort)
-    }
-
-    private func clean(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-}
-
 @MainActor
 protocol FacetPanelViewDelegate: AnyObject {
-    func facetPanel(_ panel: FacetPanelView, didSubmit prompt: String, includePageContext: Bool, configuration: FacetCodexConfiguration)
+    func facetPanel(_ panel: FacetPanelView, didSubmit prompt: String, includePageContext: Bool, configuration: FacetConfiguration, apiKey: String)
     func facetPanelDidRequestCancel(_ panel: FacetPanelView)
     func facetPanelDidRequestClose(_ panel: FacetPanelView)
+    func facetPanelDidRequestModelRefresh(_ panel: FacetPanelView)
 }
 
 @MainActor
@@ -72,7 +28,15 @@ final class FacetPanelView: NSView {
     weak var delegate: FacetPanelViewDelegate?
 
     private let titleLabel = NSTextField(labelWithString: "Facet")
-    private let statusLabel = NSTextField(labelWithString: "Ready")
+    private let statusLabel = NSTextField(labelWithString: "OpenRouter")
+    private let apiKeyField = NSSecureTextField()
+    private let apiKeyStatusLabel = NSTextField(labelWithString: "Add your OpenRouter API key to get started.")
+    private let saveKeyButton = NSButton(title: "Save", target: nil, action: nil)
+    private let removeKeyButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let getKeyButton = NSButton(title: "Get API key", target: nil, action: nil)
+    private let refreshModelsButton = FacetPanelView.makeIconButton(symbolName: "arrow.clockwise", description: "Refresh OpenRouter models")
+    private let apiKeyStore = FacetAPIKeyStore()
+    private var modelOptions = [FacetModelOption]()
     private let transcriptTextView = NSTextView()
     private let promptField = NSTextField()
     private let includePageCheckbox = NSButton(checkboxWithTitle: "Current page", target: nil, action: nil)
@@ -91,18 +55,22 @@ final class FacetPanelView: NSView {
     private let closeButton = FacetPanelView.makeIconButton(symbolName: "xmark", description: "Hide Facet")
 
     private(set) var isRunning = false
+    private var isLoadingModels = false
 
     private enum PreferenceKeys {
-        static let model = "Facet.codex.model"
-        static let reasoningEffort = "Facet.codex.reasoningEffort"
+        static let model = "Facet.openrouter.model"
+        static let reasoningEffort = "Facet.openrouter.reasoningEffort"
     }
 
     private let reasoningOptions = [
         (title: "Default", value: ""),
+        (title: "None", value: "none"),
+        (title: "Minimal", value: "minimal"),
         (title: "Low", value: "low"),
         (title: "Medium", value: "medium"),
         (title: "High", value: "high"),
-        (title: "Extra High", value: "xhigh")
+        (title: "Extra High", value: "xhigh"),
+        (title: "Maximum", value: "max")
     ]
 
     override init(frame frameRect: NSRect) {
@@ -133,37 +101,66 @@ final class FacetPanelView: NSView {
 
     func setRunning(_ running: Bool) {
         isRunning = running
-        statusLabel.stringValue = running ? "Thinking..." : "Ready"
+        updateStatus()
         promptField.isEnabled = !running
         sendButton.isHidden = running
         stopButton.isHidden = !running
         includePageCheckbox.isEnabled = !running
         modelPopup.isEnabled = !running
-        reasoningPopup.isEnabled = !running
+        reasoningPopup.isEnabled = !running && !supportedReasoningEfforts.isEmpty
+        apiKeyField.isEnabled = !running
+        saveKeyButton.isEnabled = !running
+        removeKeyButton.isEnabled = !running
+        refreshModelsButton.isEnabled = !running && !isLoadingModels
     }
 
-    func setModelOptions(_ options: [FacetCodexModelOption]) {
-        let selectedModel = currentModelSlug() ?? UserDefaults.standard.string(forKey: PreferenceKeys.model)
-        let uniqueOptions = Self.uniqueModelOptions(options)
+    func setModelsLoading(_ loading: Bool) {
+        isLoadingModels = loading
+        refreshModelsButton.isEnabled = !isRunning && !loading
+        updateStatus()
+    }
 
+    private func updateStatus() {
+        statusLabel.stringValue = isRunning ? "Thinking..." : (isLoadingModels ? "Loading models..." : "OpenRouter")
+    }
+
+    func prepareForDisplay() {
+        updateAPIKeyStatus()
+    }
+
+    func setModelOptions(_ options: [FacetModelOption]) {
+        let selectedModel = currentModelSlug() ?? UserDefaults.standard.string(forKey: PreferenceKeys.model) ?? "openrouter/auto"
+        let availableOptions = Self.uniqueModelOptions(options + FacetModelOption.fallbackOptions)
+        modelOptions = availableOptions.filter { $0.slug == "openrouter/auto" }
+            + availableOptions.filter { $0.slug != "openrouter/auto" }
         modelPopup.removeAllItems()
-        addItem(to: modelPopup, title: "Default", value: "")
-
-        if uniqueOptions.isEmpty == false {
-            modelPopup.menu?.addItem(.separator())
-        }
-
-        for option in uniqueOptions {
+        for option in modelOptions {
             addItem(to: modelPopup, title: option.menuTitle, value: option.slug)
         }
-
-        if let selectedModel,
-           selectedModel.isEmpty == false,
-           uniqueOptions.contains(where: { $0.slug == selectedModel }) == false {
+        if !modelOptions.contains(where: { $0.slug == selectedModel }) {
             addItem(to: modelPopup, title: selectedModel, value: selectedModel)
         }
+        selectItem(in: modelPopup, value: selectedModel)
+        updateReasoningOptions()
+    }
 
-        selectItem(in: modelPopup, value: selectedModel ?? "")
+    private var supportedReasoningEfforts: [String] {
+        modelOptions.first(where: { $0.slug == currentModelSlug() })?.supportedReasoningEfforts ?? []
+    }
+
+    private func updateReasoningOptions() {
+        let selectedEffort = selectedValue(in: reasoningPopup)
+            .flatMap { $0.isEmpty ? nil : $0 }
+            ?? UserDefaults.standard.string(forKey: PreferenceKeys.reasoningEffort) ?? ""
+        reasoningPopup.removeAllItems()
+        for option in reasoningOptions where option.value.isEmpty || supportedReasoningEfforts.contains(option.value) {
+            addItem(to: reasoningPopup, title: option.title, value: option.value)
+        }
+        selectItem(in: reasoningPopup, value: selectedEffort)
+        reasoningPopup.isEnabled = !isRunning && !supportedReasoningEfforts.isEmpty
+        reasoningPopup.toolTip = supportedReasoningEfforts.isEmpty
+            ? "This model uses its default reasoning settings."
+            : "OpenRouter reasoning effort for the selected model"
     }
 
     private func buildView() {
@@ -213,22 +210,49 @@ final class FacetPanelView: NSView {
         includePageCheckbox.state = .on
         includePageCheckbox.font = .systemFont(ofSize: 12)
 
-        configurePopup(modelPopup, description: "Codex model")
-        setModelOptions(FacetCodexModelOption.fallbackOptions)
+        includePageCheckbox.toolTip = "Send this page's URL, title, selected text, and text excerpt to OpenRouter with your question."
+        configurePopup(modelPopup, description: "OpenRouter model")
+        configurePopup(reasoningPopup, description: "OpenRouter reasoning effort")
+        setModelOptions(FacetModelOption.fallbackOptions)
+        modelPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        refreshModelsButton.target = self
+        refreshModelsButton.action = #selector(refreshModelsPressed(_:))
+        let modelRow = NSStackView(views: [modelPopup, refreshModelsButton])
+        modelRow.spacing = 4
+        modelRow.alignment = .centerY
 
-        configurePopup(reasoningPopup, description: "Codex reasoning level")
-        for option in reasoningOptions {
-            addItem(to: reasoningPopup, title: option.title, value: option.value)
+        apiKeyField.placeholderString = "OpenRouter API key"
+        apiKeyField.setAccessibilityLabel("OpenRouter API key")
+        apiKeyField.font = .systemFont(ofSize: 12)
+        apiKeyField.target = self
+        apiKeyField.action = #selector(saveKeyPressed(_:))
+        apiKeyField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        saveKeyButton.target = self
+        saveKeyButton.action = #selector(saveKeyPressed(_:))
+        saveKeyButton.toolTip = "Save API key in macOS Keychain"
+        removeKeyButton.target = self
+        removeKeyButton.action = #selector(removeKeyPressed(_:))
+        getKeyButton.target = self
+        getKeyButton.action = #selector(getKeyPressed(_:))
+        for button in [saveKeyButton, removeKeyButton, getKeyButton] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
         }
-        selectItem(
-            in: reasoningPopup,
-            value: UserDefaults.standard.string(forKey: PreferenceKeys.reasoningEffort) ?? ""
-        )
+        let keyRow = NSStackView(views: [apiKeyField, saveKeyButton, removeKeyButton])
+        keyRow.alignment = .centerY
+        keyRow.spacing = 4
+        apiKeyStatusLabel.font = .systemFont(ofSize: 11)
+        apiKeyStatusLabel.textColor = .secondaryLabelColor
+        apiKeyStatusLabel.lineBreakMode = .byTruncatingTail
+        apiKeyStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let keyStatusRow = NSStackView(views: [apiKeyStatusLabel, getKeyButton])
+        keyStatusRow.alignment = .centerY
+        keyStatusRow.spacing = 4
 
         let modelLabel = FacetPanelView.makeSettingLabel("Model")
         let reasoningLabel = FacetPanelView.makeSettingLabel("Reasoning")
         let settingsGrid = NSGridView(views: [
-            [modelLabel, modelPopup],
+            [modelLabel, modelRow],
             [reasoningLabel, reasoningPopup]
         ])
         settingsGrid.column(at: 0).xPlacement = .trailing
@@ -250,7 +274,7 @@ final class FacetPanelView: NSView {
         actionRow.spacing = 8
         actionRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let content = NSStackView(views: [titleRow, transcriptScrollView, settingsGrid, promptField, actionRow])
+        let content = NSStackView(views: [titleRow, keyRow, keyStatusRow, transcriptScrollView, settingsGrid, promptField, actionRow])
         content.orientation = .vertical
         content.alignment = .width
         content.spacing = 10
@@ -272,7 +296,7 @@ final class FacetPanelView: NSView {
             content.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             closeButton.widthAnchor.constraint(equalToConstant: 28),
-            transcriptScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            transcriptScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 140),
             promptField.heightAnchor.constraint(equalToConstant: 28)
         ])
     }
@@ -302,9 +326,12 @@ final class FacetPanelView: NSView {
     }
 
     @objc private func settingChanged(_ sender: Any?) {
+        if let popup = sender as? NSPopUpButton, popup === modelPopup {
+            updateReasoningOptions()
+        }
         let configuration = currentConfiguration()
-        UserDefaults.standard.set(configuration.modelArgument ?? "", forKey: PreferenceKeys.model)
-        UserDefaults.standard.set(configuration.reasoningEffortArgument ?? "", forKey: PreferenceKeys.reasoningEffort)
+        UserDefaults.standard.set(configuration.modelID, forKey: PreferenceKeys.model)
+        UserDefaults.standard.set(configuration.reasoningEffortValue ?? "", forKey: PreferenceKeys.reasoningEffort)
     }
 
     @objc private func stopPressed(_ sender: Any?) {
@@ -325,14 +352,90 @@ final class FacetPanelView: NSView {
             return
         }
 
+        let apiKey: String
+        do {
+            if !apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try saveEnteredAPIKey()
+            }
+            guard let savedKey = try resolvedAPIKey() else {
+                appendSystemMessage("Add an OpenRouter API key above before sending a message.")
+                window?.makeFirstResponder(apiKeyField)
+                return
+            }
+            apiKey = savedKey
+        } catch {
+            appendSystemMessage(error.localizedDescription)
+            return
+        }
+
         promptField.stringValue = ""
-        settingChanged(nil)
         delegate?.facetPanel(
             self,
             didSubmit: prompt,
             includePageContext: includePageCheckbox.state == .on,
-            configuration: currentConfiguration()
+            configuration: currentConfiguration(),
+            apiKey: apiKey
         )
+    }
+
+    @objc private func saveKeyPressed(_ sender: Any?) {
+        do {
+            try saveEnteredAPIKey()
+        } catch {
+            appendSystemMessage(error.localizedDescription)
+        }
+    }
+
+    private func saveEnteredAPIKey() throws {
+        try apiKeyStore.save(apiKeyField.stringValue)
+        apiKeyField.stringValue = ""
+        updateAPIKeyStatus()
+    }
+
+    @objc private func removeKeyPressed(_ sender: Any?) {
+        do {
+            try apiKeyStore.delete()
+            apiKeyField.stringValue = ""
+            updateAPIKeyStatus()
+        } catch {
+            appendSystemMessage(error.localizedDescription)
+        }
+    }
+
+    @objc private func getKeyPressed(_ sender: Any?) {
+        NSWorkspace.shared.open(URL(string: "https://openrouter.ai/settings/keys")!)
+    }
+
+    @objc private func refreshModelsPressed(_ sender: Any?) {
+        delegate?.facetPanelDidRequestModelRefresh(self)
+    }
+
+    private var environmentAPIKey: String? {
+        let value = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private func resolvedAPIKey() throws -> String? {
+        try apiKeyStore.load() ?? environmentAPIKey
+    }
+
+    private func updateAPIKeyStatus() {
+        do {
+            if try apiKeyStore.load() != nil {
+                apiKeyStatusLabel.stringValue = "API key saved in Keychain"
+                apiKeyField.placeholderString = "Replace OpenRouter API key"
+            } else if environmentAPIKey != nil {
+                apiKeyStatusLabel.stringValue = "Using OPENROUTER_API_KEY"
+                apiKeyField.placeholderString = "OpenRouter API key"
+            } else {
+                apiKeyStatusLabel.stringValue = "Add an OpenRouter API key"
+                apiKeyField.placeholderString = "OpenRouter API key"
+            }
+        } catch {
+            apiKeyStatusLabel.stringValue = error.localizedDescription
+        }
+        apiKeyStatusLabel.toolTip = apiKeyStatusLabel.stringValue
     }
 
     private func configurePopup(_ popup: NSPopUpButton, description: String) {
@@ -343,8 +446,8 @@ final class FacetPanelView: NSView {
         popup.toolTip = description
     }
 
-    private func currentConfiguration() -> FacetCodexConfiguration {
-        FacetCodexConfiguration(
+    private func currentConfiguration() -> FacetConfiguration {
+        FacetConfiguration(
             model: currentModelSlug(),
             reasoningEffort: selectedValue(in: reasoningPopup)
         )
@@ -400,7 +503,7 @@ final class FacetPanelView: NSView {
         return label
     }
 
-    private static func uniqueModelOptions(_ options: [FacetCodexModelOption]) -> [FacetCodexModelOption] {
+    private static func uniqueModelOptions(_ options: [FacetModelOption]) -> [FacetModelOption] {
         var seen = Set<String>()
         return options.filter { option in
             guard seen.contains(option.slug) == false else {
@@ -409,217 +512,6 @@ final class FacetPanelView: NSView {
 
             seen.insert(option.slug)
             return true
-        }
-    }
-}
-
-final class FacetCodexRunner: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "FacetCodexRunner", qos: .userInitiated)
-    private let lock = NSLock()
-    private var activeProcess: Process?
-
-    func run(prompt: String, configuration: FacetCodexConfiguration) async -> FacetCodexResult {
-        await withCheckedContinuation { continuation in
-            queue.async { [self, prompt, configuration, continuation] in
-                let result = runSynchronously(prompt: prompt, configuration: configuration)
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    func loadModelOptions() async -> [FacetCodexModelOption] {
-        await withCheckedContinuation { continuation in
-            queue.async {
-                continuation.resume(returning: Self.loadModelOptionsSynchronously())
-            }
-        }
-    }
-
-    func cancel() {
-        lock.lock()
-        let process = activeProcess
-        lock.unlock()
-
-        process?.terminate()
-    }
-
-    private func runSynchronously(prompt: String, configuration: FacetCodexConfiguration) -> FacetCodexResult {
-        guard let executableURL = Self.codexExecutableURL() else {
-            return FacetCodexResult(
-                output: "Facet could not find the Codex CLI. Install Codex or make sure the `codex` command is available at ~/.local/bin/codex, /opt/homebrew/bin/codex, /usr/local/bin/codex, or on PATH.",
-                exitStatus: 127,
-                wasCancelled: false
-            )
-        }
-
-        let process = Process()
-        process.executableURL = executableURL
-        let lastMessageURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("facet-codex-\(UUID().uuidString).txt", isDirectory: false)
-        var arguments = [
-            "--ask-for-approval",
-            "never"
-        ]
-        if let model = configuration.modelArgument {
-            arguments.append(contentsOf: ["--model", model])
-        }
-        if let reasoningEffort = configuration.reasoningEffortArgument {
-            arguments.append(contentsOf: ["--config", "model_reasoning_effort=\"\(reasoningEffort)\""])
-        }
-        arguments.append(contentsOf: [
-            "exec",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--sandbox",
-            "read-only",
-            "--color",
-            "never",
-            "--output-last-message",
-            lastMessageURL.path,
-            "-C",
-            FileManager.default.homeDirectoryForCurrentUser.path,
-            "-"
-        ])
-        process.arguments = arguments
-
-        var environment = ProcessInfo.processInfo.environment
-        environment["TERM"] = environment["TERM"] ?? "dumb"
-        process.environment = environment
-
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
-        process.standardInput = inputPipe
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-
-        lock.lock()
-        activeProcess = process
-        lock.unlock()
-
-        do {
-            try process.run()
-            if let inputData = prompt.data(using: .utf8) {
-                inputPipe.fileHandleForWriting.write(inputData)
-            }
-            try? inputPipe.fileHandleForWriting.close()
-
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-
-            lock.lock()
-            if activeProcess === process {
-                activeProcess = nil
-            }
-            lock.unlock()
-
-            let rawOutput = String(data: outputData, encoding: .utf8) ?? ""
-            let lastMessage = (try? String(contentsOf: lastMessageURL, encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            try? FileManager.default.removeItem(at: lastMessageURL)
-            let output: String
-            if let lastMessage, lastMessage.isEmpty == false {
-                output = lastMessage
-            } else {
-                output = rawOutput
-            }
-            let wasCancelled = process.terminationStatus == 15
-            return FacetCodexResult(
-                output: output.trimmingCharacters(in: .whitespacesAndNewlines),
-                exitStatus: process.terminationStatus,
-                wasCancelled: wasCancelled
-            )
-        } catch {
-            try? FileManager.default.removeItem(at: lastMessageURL)
-            lock.lock()
-            if activeProcess === process {
-                activeProcess = nil
-            }
-            lock.unlock()
-
-            return FacetCodexResult(
-                output: error.localizedDescription,
-                exitStatus: 1,
-                wasCancelled: false
-            )
-        }
-    }
-
-    private static func codexExecutableURL() -> URL? {
-        let pathValues = ProcessInfo.processInfo.environment["PATH"]?
-            .split(separator: ":")
-            .map(String.init) ?? []
-        let fallbackPaths = [
-            "~/.local/bin",
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin"
-        ]
-        let expandedSearchPaths = (pathValues + fallbackPaths).map { path in
-            (path as NSString).expandingTildeInPath
-        }
-
-        for directory in expandedSearchPaths {
-            let candidate = (directory as NSString).appendingPathComponent("codex")
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return URL(fileURLWithPath: candidate)
-            }
-        }
-
-        return nil
-    }
-
-    private static func loadModelOptionsSynchronously() -> [FacetCodexModelOption] {
-        guard let executableURL = codexExecutableURL() else {
-            return FacetCodexModelOption.fallbackOptions
-        }
-
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = ["debug", "models", "--bundled"]
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-
-            guard process.terminationStatus == 0 else {
-                return FacetCodexModelOption.fallbackOptions
-            }
-
-            let catalog = try JSONDecoder().decode(CodexModelCatalog.self, from: outputData)
-            let options = catalog.models
-                .filter { $0.visibility == "list" }
-                .map {
-                    FacetCodexModelOption(
-                        slug: $0.slug,
-                        displayName: $0.displayName?.isEmpty == false ? $0.displayName! : $0.slug
-                    )
-                }
-
-            return options.isEmpty ? FacetCodexModelOption.fallbackOptions : options
-        } catch {
-            return FacetCodexModelOption.fallbackOptions
-        }
-    }
-
-    private struct CodexModelCatalog: Decodable {
-        let models: [CodexModelRecord]
-    }
-
-    private struct CodexModelRecord: Decodable {
-        let slug: String
-        let displayName: String?
-        let visibility: String?
-
-        private enum CodingKeys: String, CodingKey {
-            case slug
-            case displayName = "display_name"
-            case visibility
         }
     }
 }

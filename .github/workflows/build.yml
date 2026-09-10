@@ -42,5 +42,5 @@ jobs:
 
       - name: Verify universal package
         run: |
-          xcrun lipo -verify_arch arm64 x86_64 dist/Quartz.app/Contents/MacOS/Quartz
+          xcrun lipo dist/Quartz.app/Contents/MacOS/Quartz -verify_arch arm64 x86_64
           unzip -t dist/Quartz.zip

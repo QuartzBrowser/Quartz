@@ -48,9 +48,10 @@ Scripts/package-macos-app.sh
 open dist/Quartz.app
 ```
 
-The default local package is ad-hoc signed. Release-quality public downloads
-need a Developer ID certificate and notarization, as described in the
-[README](README.md).
+The default local package is ad-hoc signed. Automated releases use Ed25519
+signatures for the update feed and app archive without requiring a paid Apple
+Developer account. See [update setup](docs/UPDATES.md) for signing configuration
+and the initial macOS download warning.
 
 ## Pull Requests
 

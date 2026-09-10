@@ -15,9 +15,8 @@ module.exports = {
       "@semantic-release/exec",
       {
         prepareCmd: [
+          "Scripts/prepare-release.sh '${nextRelease.version}'",
           "printf '%s\\n' '${nextRelease.version}' > version.txt",
-          "VERSION='${nextRelease.version}' BUILD_NUMBER='${nextRelease.version}' ZIP_APP=1 Scripts/package-macos-app.sh",
-          "mv dist/Quartz.zip dist/Quartz-${nextRelease.gitTag}-macos-universal.zip",
         ].join(" && "),
       },
     ],
@@ -31,11 +30,17 @@ module.exports = {
     [
       "@semantic-release/github",
       {
+        successComment: false,
+        failComment: false,
         assets: [
           {
-            path: "dist/Quartz-${nextRelease.gitTag}-macos-universal.zip",
+            // Asset paths are globs, not templates. A templated path silently
+            // published releases without a downloadable application.
+            path: "dist/release/Quartz-v*-macos-universal.zip",
             label: "Quartz ${nextRelease.gitTag} macOS universal app",
           },
+          { path: "dist/release/appcast.xml", label: "Signed Quartz update feed" },
+          { path: "dist/release/SHA256SUMS", label: "Release checksums" },
         ],
       },
     ],

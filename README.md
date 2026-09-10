@@ -42,7 +42,9 @@ The default package is ad-hoc signed for local development. If macOS blocks a do
 xattr -dr com.apple.quarantine /path/to/Quartz.app
 ```
 
-Public downloads require a Developer ID certificate and Apple notarization:
+The automated release workflow uses free Ed25519 update signing without an Apple
+Developer account; see [update setup](docs/UPDATES.md). If Developer ID credentials
+are available, signing and notarization can remove the initial macOS warning:
 
 ```sh
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ZIP_APP=1 Scripts/package-macos-app.sh
@@ -54,7 +56,7 @@ xcrun stapler staple dist/Quartz.app
 
 - WebKit-powered browsing
 - Native local start page with direct access to search, Facet, and extensions
-- Automatic notifications for new Quartz releases, with a manual update check
+- In-browser updates with verified downloads, progress, and automatic restart
 - Tiny built-in ad blocker for obvious third-party ad resources
 - Reading mode for article-focused pages
 - Facet side-panel assistant powered by OpenRouter
@@ -67,13 +69,15 @@ xcrun stapler staple dist/Quartz.app
 
 When there is no saved browsing session, Quartz opens a self-contained local start page instead of contacting a placeholder website. Its search box uses the same URL and DuckDuckGo search routing as the native address field, and its feature cards open the existing Facet panel and Extensions menu. The Home button always returns there; a valid saved web or file URL still takes precedence at launch.
 
-## Update Notifications
+## Updates
 
-Packaged copies of Quartz check the public GitHub release feed on launch and about once an hour while running. Checks are limited to once per hour across launches. Quartz announces each newer stable version once; clicking the notification opens its release page. Quartz asks for macOS notification permission when it first finds an update. If notifications are unavailable, it shows a notice in the browser window instead.
+Release builds check for updates about once an hour while Quartz is running. When a compatible update is available, an **Update & Restart** button appears in the browser toolbar. Click it to download, verify, and install the update, then restart Quartz and restore your current page. Download and installation progress appear in the browser. You can cancel while checking or downloading; installation starts only after you choose to update.
 
-Use **Quartz > Check for Updates…** to check immediately, or turn off **Quartz > Automatically Check for Updates** to disable automatic checks. Manual checks still work when automatic checking is off. Updates are installed manually from the release page when a download is available. Checks do not run while Quartz is quit.
+Use **Quartz > Check for Updates…** to check immediately, or turn off **Quartz > Automatically Check for Updates** to disable automatic checks. Your existing preference is preserved. Manual checks still work when automatic checking is off.
 
-Update checks send an unauthenticated request to GitHub, without browsing history or Facet data. Running with `swift run Quartz` has no app-bundle version, so update checking requires a packaged `Quartz.app`.
+[Sparkle](https://sparkle-project.org/) verifies the signed release feed and the update archive before extraction. A failed check or download shows an explanation and can be retried. Quartz keeps browsing data, extensions, and settings outside the app bundle, and the updater replaces the app itself.
+
+Update requests go to GitHub without browsing history or Facet data. Running with `swift run Quartz`, or packaging without an update signing key, provides a development build with updates unavailable. Existing releases that predate the updater need one manual installation of an updater-enabled release. Maintainers can find signing, release setup, and verification instructions in [docs/UPDATES.md](docs/UPDATES.md).
 
 ## Facet
 

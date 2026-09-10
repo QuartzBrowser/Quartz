@@ -426,7 +426,7 @@ enum QuartzStartPage {
             <span class="badge">⇧⌘F</span>
           </div>
           <h2>Meet Facet</h2>
-          <p>Ask about the current page or selected text, then choose the Codex model and reasoning level that fit the job.</p>
+          <p>Ask about the current page or selected text, then choose an OpenRouter model and reasoning level that fit the job.</p>
           <a class="card-action" href="quartz-action://facet">Open Facet</a>
         </article>
 

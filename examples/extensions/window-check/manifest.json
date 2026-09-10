@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Quartz Window Check",
+  "version": "1.0.0",
+  "description": "Manual diagnostics for opening and querying browser windows in Quartz.",
+  "permissions": ["tabs"],
+  "action": {
+    "default_title": "Quartz Window Check",
+    "default_popup": "popup.html"
+  }
+}

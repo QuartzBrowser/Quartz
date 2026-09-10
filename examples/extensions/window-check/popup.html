@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quartz Window Check</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { width: 360px; margin: 0; padding: 16px; font: 13px/1.4 system-ui, sans-serif; }
+      h1 { margin: 0 0 8px; font-size: 18px; }
+      button { padding: 6px 10px; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+    </style>
+    <script src="popup.js" defer></script>
+  </head>
+  <body>
+    <h1>Quartz Window Check</h1>
+    <p>Each page button opens example.com when clicked. Inspect reads open tab URLs and titles. Nothing is sent elsewhere.</p>
+    <div class="actions">
+      <button id="new-tab">New tab</button>
+      <button id="background-tab">Background tab</button>
+      <button id="new-window">New window</button>
+      <button id="background-window">Background window</button>
+      <button id="blank-tab">Blank tab</button>
+      <button id="inspect">Inspect windows</button>
+    </div>
+    <pre id="result" role="status" aria-live="polite">Choose an action.</pre>
+  </body>
+</html>

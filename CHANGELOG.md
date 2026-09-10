@@ -1,3 +1,17 @@
+# [0.9.0](https://github.com/QuartzBrowser/Quartz/compare/v0.8.0...v0.9.0) (2026-09-10)
+
+
+### Bug Fixes
+
+* keep notification center calls on the main actor ([b7176d6](https://github.com/QuartzBrowser/Quartz/commit/b7176d62ce24de1a147f011f0901cfde8e9c0551))
+* support notification settings on Xcode 16.4 ([2c305d8](https://github.com/QuartzBrowser/Quartz/commit/2c305d81b346e6af1e54448903ac4f081ef097c4))
+* validate package architecture arguments ([ce1c37a](https://github.com/QuartzBrowser/Quartz/commit/ce1c37a0401a503cfd66704ae6720c318371a812))
+
+
+### Features
+
+* notify users when Quartz updates are released ([d71e6c0](https://github.com/QuartzBrowser/Quartz/commit/d71e6c03bc2f1d108d5ed8793b54c3aaaa6b99c6))
+
 # [0.8.0](https://github.com/QuartzBrowser/Quartz/compare/v0.7.0...v0.8.0) (2026-09-10)
 
 

@@ -36,7 +36,7 @@ final class QuartzUpdateNotifications: NSObject, UNUserNotificationCenterDelegat
             var settings = await Self.authorizationSettings(for: center)
             if settings.needsAuthorization {
                 // Ask in context, only once an update actually exists.
-                guard try await center.requestAuthorization(options: [.alert]) else { return false }
+                guard try await Self.requestAuthorization(for: center) else { return false }
                 settings = await Self.authorizationSettings(for: center)
             }
             guard !Task.isCancelled, shouldDeliver(), settings.canDeliver
@@ -48,7 +48,10 @@ final class QuartzUpdateNotifications: NSObject, UNUserNotificationCenterDelegat
             content.userInfo = ["releaseURL": release.url.absoluteString]
             // Replace an older notice instead of accumulating stale updates.
             center.removeDeliveredNotifications(withIdentifiers: [Self.identifier])
-            try await center.add(UNNotificationRequest(identifier: Self.identifier, content: content, trigger: nil))
+            try await Self.submit(
+                UNNotificationRequest(identifier: Self.identifier, content: content, trigger: nil),
+                to: center
+            )
             return true
         } catch {
             return false
@@ -65,6 +68,30 @@ final class QuartzUpdateNotifications: NSObject, UNUserNotificationCenterDelegat
                     alertSetting: settings.alertSetting,
                     notificationCenterSetting: settings.notificationCenterSetting
                 ))
+            }
+        }
+    }
+
+    private static func requestAuthorization(for center: UNUserNotificationCenter) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            center.requestAuthorization(options: [.alert]) { @Sendable granted, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+    }
+
+    private static func submit(_ request: UNNotificationRequest, to center: UNUserNotificationCenter) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            center.add(request) { @Sendable error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
             }
         }
     }

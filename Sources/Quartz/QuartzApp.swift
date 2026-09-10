@@ -23,6 +23,14 @@ struct QuartzApp {
 
 @MainActor
 final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, NSTextFieldDelegate, FacetPanelViewDelegate {
+    private(set) static var openBrowsers = [BrowserController]()
+    private static weak var applicationController: BrowserController?
+    private static var latestUpdateState: QuartzUpdateState = .idle
+    private(set) static weak var lastFocusedBrowser: BrowserController?
+    private let restoresSavedSession: Bool
+    private let focusesWindowOnOpen: Bool
+    private let sessionDefaults: UserDefaults
+    private var initialNavigation: ((BrowserController) -> Void)?
     private var window: NSWindow!
     private var webContentView: NSView!
     private var facetPanelView: FacetPanelView!
@@ -39,26 +47,35 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var facetMessages = [FacetChatMessage]()
     private var hasLoadedFacetModels = false
     private var didStart = false
+    private var hasClosedWindow = false
     private var sessionURL: URL?
+    private var pendingNavigationURL: URL?
     private var isShowingStartPage = false
     private var didRestoreSession = false
     private var pendingUpdateReleaseURL: URL?
     private var checkForUpdatesMenuItem: NSMenuItem?
     private var automaticUpdatesMenuItem: NSMenuItem?
     private let updateProgressIndicator = NSProgressIndicator()
-    private lazy var updateController: QuartzUpdateController = QuartzUpdateController(
+    private var updateController: QuartzUpdateController {
+        (Self.applicationController ?? self).ownedUpdateController
+    }
+    private lazy var ownedUpdateController: QuartzUpdateController = QuartzUpdateController(
         stateChanged: { [weak self] state in
-            self?.updateUpdateControls(state)
+            Self.latestUpdateState = state
+            for browser in Self.openBrowsers {
+                browser.updateUpdateControls(state)
+            }
+            if Self.openBrowsers.isEmpty { self?.updateUpdateControls(state) }
         },
         presentMessage: { [weak self] title, message, acknowledgement in
             guard let self else { acknowledgement(); return }
-            self.presentUpdateMessage(title: title, message: message, acknowledgement: acknowledgement)
+            (Self.lastFocusedBrowser ?? self).presentUpdateMessage(title: title, message: message, acknowledgement: acknowledgement)
         },
         openInformationURL: { [weak self] url in
-            self?.openUpdateRelease(url)
+            (Self.lastFocusedBrowser ?? self)?.openUpdateRelease(url)
         },
         prepareForRelaunch: { [weak self] in
-            self?.saveCurrentSession()
+            (Self.lastFocusedBrowser ?? self)?.saveCurrentSession()
         }
     )
 
@@ -101,6 +118,15 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private static let savedSessionURLKey = "Quartz.savedSession.url"
     private static let sandboxedExtensionPageScheme = "quartz-extension-sandbox"
 
+    init(sharedExtensionSupport: AnyObject? = nil, restoresSavedSession: Bool = true, focusesWindow: Bool = true, sessionDefaults: UserDefaults = .standard) {
+        self.webExtensionSupport = sharedExtensionSupport
+        self.restoresSavedSession = restoresSavedSession
+        self.focusesWindowOnOpen = focusesWindow
+        self.sessionDefaults = sessionDefaults
+        super.init()
+    }
+    private lazy var downloadCoordinator = QuartzDownloadCoordinator(window: { [weak self] in self?.window })
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         start()
         updateController.start()
@@ -112,8 +138,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
 
         didStart = true
-
-        buildMenu()
+        if Self.applicationController == nil {
+            Self.applicationController = self
+            buildMenu()
+        }
         buildWindow()
         loadSavedExtensionsThenRestoreSession()
     }
@@ -123,13 +151,48 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        activeFacetTask?.cancel()
-        facetModelOptionsTask?.cancel()
-        saveCurrentSession()
+        for browser in Self.openBrowsers {
+            browser.activeFacetTask?.cancel()
+            browser.facetModelOptionsTask?.cancel()
+            browser.downloadCoordinator.cancelAll(discardStagingImmediately: true)
+        }
+        Self.lastFocusedBrowser?.saveCurrentSession()
     }
 
     func windowWillClose(_ notification: Notification) {
         saveCurrentSession()
+        hasClosedWindow = true
+        initialNavigation = nil
+        pendingNavigationURL = nil
+        activeFacetTask?.cancel()
+        facetModelOptionsTask?.cancel()
+        downloadCoordinator.cancelAll()
+        webView.stopLoading()
+        Self.openBrowsers.removeAll { $0 === self }
+        if Self.lastFocusedBrowser === self { Self.lastFocusedBrowser = Self.openBrowsers.last }
+        if #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport {
+            support.unregisterBrowser(self)
+        }
+        Self.lastFocusedBrowser?.buildMenu()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        Self.lastFocusedBrowser = self
+        buildMenu()
+        updateControls()
+    }
+
+    @discardableResult
+    func openBrowserWindow(focused: Bool = true, initialURL: URL? = nil, navigate: ((BrowserController) -> Void)? = nil) -> BrowserController {
+        let browser = BrowserController(sharedExtensionSupport: webExtensionSupport, restoresSavedSession: false, focusesWindow: focused, sessionDefaults: sessionDefaults)
+        browser.initialNavigation = navigate
+        browser.pendingNavigationURL = initialURL ?? QuartzStartPage.url
+        browser.start()
+        return browser
+    }
+
+    @objc private func newWindow(_ sender: Any?) {
+        openBrowserWindow()
     }
 
     private func buildWindow() {
@@ -145,9 +208,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         adBlocker.connect(to: userContentController)
 
         if #available(macOS 15.4, *) {
-            let support = QuartzWebExtensionSupport(browser: self, webViewConfiguration: configuration)
+            let support = (webExtensionSupport as? QuartzWebExtensionSupport)
+                ?? QuartzWebExtensionSupport(browser: self, webViewConfiguration: configuration)
             configuration.webExtensionController = support.controller
             webExtensionSupport = support
+            support.onChange = {
+                for browser in Self.openBrowsers { browser.updateControls() }
+            }
         }
 
         let initialWebView = makeWebView(configuration: configuration)
@@ -185,7 +252,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         updateProgressIndicator.translatesAutoresizingMaskIntoConstraints = false
         updateProgressIndicator.widthAnchor.constraint(equalToConstant: 50).isActive = true
         updateProgressIndicator.setAccessibilityLabel("Quartz update progress")
-        updateUpdateControls(.idle)
+        updateUpdateControls(Self.latestUpdateState)
         webStoreInstallButton.isHidden = true
         updateAdBlockerControls()
         updateExtensionsButton()
@@ -263,12 +330,22 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             defer: false
         )
         window.title = "Quartz"
+        window.isReleasedWhenClosed = false
+        window.tabbingMode = .disallowed
         window.delegate = self
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.center()
         window.minSize = NSSize(width: 520, height: 360)
         window.contentView = container
-        window.makeKeyAndOrderFront(nil)
+        Self.openBrowsers.append(self)
+        if #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport {
+            support.registerBrowser(self)
+        }
+        if focusesWindowOnOpen {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            window.orderBack(nil)
+        }
         window.setContentSize(NSSize(width: 1100, height: 740))
         window.layoutIfNeeded()
 
@@ -298,6 +375,15 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         appMenu.addItem(withTitle: "Quit Quartz", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
+
+        let fileMenu = NSMenu(title: "File")
+        let newWindowItem = NSMenuItem(title: "New Window", action: #selector(newWindow(_:)), keyEquivalent: "n")
+        newWindowItem.target = self
+        fileMenu.addItem(newWindowItem)
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let fileMenuItem = NSMenuItem()
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
 
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
@@ -391,14 +477,22 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
         extensionsMenu.addItem(.separator())
 
-        let extensionStatusItem = NSMenuItem(title: "Extension Status", action: #selector(showExtensionStatus(_:)), keyEquivalent: "")
+        let extensionStatusItem = NSMenuItem(title: "Manage Extensions…", action: #selector(showExtensionStatus(_:)), keyEquivalent: "")
         extensionStatusItem.target = self
         extensionsMenu.addItem(extensionStatusItem)
 
         extensionsMenuItem.submenu = extensionsMenu
         mainMenu.addItem(extensionsMenuItem)
 
+        let windowsMenu = NSMenu(title: "Window")
+        windowsMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowsMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        let windowsMenuItem = NSMenuItem()
+        windowsMenuItem.submenu = windowsMenu
+        mainMenu.addItem(windowsMenuItem)
+
         NSApplication.shared.mainMenu = mainMenu
+        NSApplication.shared.windowsMenu = windowsMenu
     }
 
     private static func makeIconButton(symbolName: String, description: String) -> NSButton {
@@ -459,6 +553,9 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         embed(webView: newWebView)
+        if #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport {
+            support.webViewDidChange(in: self)
+        }
     }
 
     @objc private func checkForUpdates(_ sender: Any?) {
@@ -761,7 +858,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             isEnabled: !isInstallingExtension
         ))
         menu.addItem(.separator())
-        menu.addItem(makeMenuItem(title: "Extension Status", action: #selector(showExtensionStatus(_:))))
+        menu.addItem(makeMenuItem(title: "Manage Extensions…", action: #selector(showExtensionStatus(_:))))
 
         return menu
     }
@@ -844,12 +941,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             return
         }
 
-        let installedExtensions = support.installedExtensionNames
-        let message = installedExtensions.isEmpty
-            ? "No extensions are installed."
-            : installedExtensions.joined(separator: "\n")
-
-        showExtensionAlert(title: "Extensions", message: message)
+        support.showManager()
     }
 
     private func showExtensionsUnavailableAlert() {
@@ -889,37 +981,12 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var currentChromeWebStoreExtensionReference: String? {
         guard webView != nil,
               let url = webView.url ?? sessionURL,
-              Self.chromeWebStoreExtensionID(fromChromeWebStoreURL: url) != nil
+              QuartzChromeWebStoreReference.extensionID(fromURL: url) != nil
         else {
             return nil
         }
 
         return url.absoluteString
-    }
-
-    private static func chromeWebStoreExtensionID(fromChromeWebStoreURL url: URL) -> String? {
-        guard let host = url.host?.lowercased(),
-              ["chromewebstore.google.com", "chrome.google.com"].contains(host),
-              url.pathComponents.contains("detail")
-        else {
-            return nil
-        }
-
-        let tokens = url.pathComponents.flatMap { component in
-            component.components(separatedBy: CharacterSet.alphanumerics.inverted)
-        }
-
-        return tokens.first { isChromeWebStoreExtensionID($0) }?.lowercased()
-    }
-
-    private static func isChromeWebStoreExtensionID(_ token: String) -> Bool {
-        let lowercasedToken = token.lowercased()
-        guard lowercasedToken.count == 32 else {
-            return false
-        }
-
-        let validCharacters = CharacterSet(charactersIn: "abcdefghijklmnop")
-        return lowercasedToken.unicodeScalars.allSatisfy { validCharacters.contains($0) }
     }
 
     private static func extensionInstallContentTypes() -> [UTType] {
@@ -953,7 +1020,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         adBlockerMenuItem?.isEnabled = false
 
         adBlocker.prepare { [weak self] result in
-            guard let self else {
+            guard let self, !self.hasClosedWindow else {
                 return
             }
 
@@ -968,12 +1035,23 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func loadSavedExtensionsThenRestoreSessionAfterContentFilters() {
+        if !restoresSavedSession {
+            guard !didRestoreSession else { return }
+            didRestoreSession = true
+            if let navigate = initialNavigation {
+                initialNavigation = nil
+                navigate(self)
+            } else {
+                loadStartPage()
+            }
+            return
+        }
         if #available(macOS 15.4, *), let support = webExtensionSupport as? QuartzWebExtensionSupport {
             addressField.stringValue = "Loading extensions..."
             extensionsButton.isEnabled = false
 
             support.loadSavedExtensions { [weak self] in
-                guard let self else {
+                guard let self, !self.hasClosedWindow else {
                     return
                 }
 
@@ -1064,17 +1142,29 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         window
     }
 
+    var extensionURL: URL? {
+        displayURLOverride ?? webView?.url
+    }
+
+    var extensionPendingURL: URL? {
+        pendingNavigationURL
+    }
+
     func loadFromExtension(_ url: URL) {
         load(url)
     }
 
     func loadSandboxedExtensionPage(_ url: URL, from resourceRootURL: URL, displayURL: URL) {
+        guard !hasClosedWindow else { return }
         guard let sandboxURL = Self.sandboxedExtensionPageURL(for: url, in: resourceRootURL) else {
             load(displayURL)
             return
         }
 
         displayURLOverride = displayURL
+        initialNavigation = nil
+        didRestoreSession = true
+        pendingNavigationURL = displayURL
 
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore.default()
@@ -1100,6 +1190,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func load(_ url: URL) {
+        guard !hasClosedWindow else { return }
+        initialNavigation = nil
+        didRestoreSession = true
+        pendingNavigationURL = url
         displayURLOverride = nil
         let isStartPageRequest = QuartzStartPage.isStartPageURL(url)
 
@@ -1120,6 +1214,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func restoreSession() {
+        guard !hasClosedWindow, !didRestoreSession else { return }
         didRestoreSession = true
         if let releaseURL = pendingUpdateReleaseURL {
             pendingUpdateReleaseURL = nil
@@ -1137,8 +1232,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     private func saveCurrentSession() {
         if isShowingStartPage || QuartzStartPage.isStartPageURL(webView?.url) {
-            UserDefaults.standard.removeObject(forKey: Self.savedSessionURLKey)
-            _ = UserDefaults.standard.synchronize()
+            sessionDefaults.removeObject(forKey: Self.savedSessionURLKey)
+            _ = sessionDefaults.synchronize()
             return
         }
 
@@ -1148,12 +1243,12 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             return
         }
 
-        UserDefaults.standard.set(url.absoluteString, forKey: Self.savedSessionURLKey)
-        _ = UserDefaults.standard.synchronize()
+        sessionDefaults.set(url.absoluteString, forKey: Self.savedSessionURLKey)
+        _ = sessionDefaults.synchronize()
     }
 
     private func restoredSessionURL() -> URL? {
-        guard let savedValue = UserDefaults.standard.string(forKey: Self.savedSessionURLKey),
+        guard let savedValue = sessionDefaults.string(forKey: Self.savedSessionURLKey),
               let url = URL(string: savedValue),
               Self.isRestorableSessionURL(url)
         else {
@@ -1259,7 +1354,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         readerButton.isEnabled = false
         readerModeMenuItem?.isEnabled = false
 
-        webView.evaluateJavaScript(Self.enterReaderModeScript) { [weak self] result, error in
+        webView.evaluateJavaScript(QuartzReaderMode.enterScript) { [weak self] result, error in
             guard let self else {
                 return
             }
@@ -1290,7 +1385,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         readerButton.isEnabled = false
         readerModeMenuItem?.isEnabled = false
 
-        webView.evaluateJavaScript(Self.exitReaderModeScript) { [weak self] _, _ in
+        webView.evaluateJavaScript(QuartzReaderMode.exitScript) { [weak self] _, _ in
             guard let self else {
                 return
             }
@@ -1498,7 +1593,33 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             return
         }
 
-        decisionHandler(.allow)
+        if webView === self.webView, navigationAction.targetFrame?.isMainFrame == true, !navigationAction.shouldPerformDownload {
+            pendingNavigationURL = displayURLOverride ?? url
+        }
+        decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
+    ) {
+        let shouldDownload = QuartzDownloadPolicy.shouldDownload(
+            navigationResponse.response, canShowMIMEType: navigationResponse.canShowMIMEType
+        )
+        decisionHandler(shouldDownload ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        if webView === self.webView { pendingNavigationURL = nil }
+        downloadCoordinator.begin(download)
+        updateControls()
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        if webView === self.webView { pendingNavigationURL = nil }
+        downloadCoordinator.begin(download)
+        updateControls()
     }
 
     private func handleStartPageAction(_ action: QuartzStartPageAction) {
@@ -1517,6 +1638,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if webView === self.webView { pendingNavigationURL = nil }
         isShowingStartPage = webView === standardWebView
             && QuartzStartPage.isStartPageURL(webView.url)
         if isShowingStartPage {
@@ -1532,6 +1654,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === self.webView, !hasClosedWindow else { return }
+        pendingNavigationURL = nil
         if let url = webView.url {
             let displayURL = displayURLOverride ?? url
             isShowingStartPage = QuartzStartPage.isStartPageURL(displayURL)
@@ -1545,14 +1669,25 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView, !hasClosedWindow else { return }
+        pendingNavigationURL = nil
         showLoadError(error)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView, !hasClosedWindow else { return }
+        pendingNavigationURL = nil
         showLoadError(error)
     }
 
     private func showLoadError(_ error: Error) {
+        let navigationError = error as NSError
+        // WebKit cancels navigation when handing a response to a download.
+        if (navigationError.domain == NSURLErrorDomain && navigationError.code == NSURLErrorCancelled)
+            || (navigationError.domain == "WebKitErrorDomain" && navigationError.code == 102) {
+            updateControls()
+            return
+        }
         let alert = NSAlert(error: error)
         alert.messageText = "Quartz could not load this page."
         alert.informativeText = error.localizedDescription
@@ -1582,354 +1717,5 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 })();
 """#
 
-    private static let enterReaderModeScript = #"""
-(() => {
-    if (window.__quartzReaderMode?.overlay?.isConnected) {
-        return { ok: true, alreadyActive: true };
-    }
 
-    const cleanText = (value) => (value || "").replace(/\s+/g, " ").trim();
-    const pageTitle = cleanText(
-        document.querySelector("meta[property='og:title']")?.content ||
-        document.querySelector("meta[name='twitter:title']")?.content ||
-        document.querySelector("h1")?.innerText ||
-        document.title ||
-        location.hostname
-    );
-    const byline = cleanText(
-        document.querySelector("meta[name='author']")?.content ||
-        document.querySelector("[rel='author']")?.innerText ||
-        document.querySelector(".byline, .author, [class*='byline'], [class*='author']")?.innerText ||
-        ""
-    );
-    const site = cleanText(
-        document.querySelector("meta[property='og:site_name']")?.content ||
-        location.hostname.replace(/^www\./, "")
-    );
-    const isVisible = (element) => {
-        const style = window.getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            rect.width > 0 &&
-            rect.height > 0;
-    };
-    const textFor = (element) => cleanText(element.innerText || element.textContent || "");
-    const signatureFor = (element) => `${element.id || ""} ${element.className || ""}`.toLowerCase();
-    const scoreCandidate = (element) => {
-        const text = textFor(element);
-        const paragraphs = Array.from(element.querySelectorAll("p"));
-        const paragraphTextLength = paragraphs.reduce((length, paragraph) => length + textFor(paragraph).length, 0);
-        const linkTextLength = Array.from(element.querySelectorAll("a"))
-            .reduce((length, link) => length + textFor(link).length, 0);
-        const textLength = Math.max(text.length, paragraphTextLength);
-
-        if (textLength < 500 || paragraphTextLength < 280) {
-            return -Infinity;
-        }
-
-        const tagScore = {
-            ARTICLE: 900,
-            MAIN: 780,
-            SECTION: 180,
-            DIV: 80
-        }[element.tagName] || 0;
-        const signature = signatureFor(element);
-        const positive = /(article|content|entry|feature|main|post|reader|story|text)/.test(signature) ? 420 : 0;
-        const negative = /(ad|aside|banner|comment|footer|header|menu|modal|nav|promo|related|share|sidebar|sponsor|subscribe)/.test(signature) ? 760 : 0;
-        const linkPenalty = (linkTextLength / Math.max(textLength, 1)) * 1050;
-        const paragraphScore = paragraphs.length * 90;
-        const headingScore = element.querySelectorAll("h1, h2, h3").length * 30;
-        const mediaScore = Math.min(element.querySelectorAll("img, picture, figure").length, 4) * 25;
-
-        return tagScore + positive + paragraphScore + headingScore + mediaScore + (textLength * 0.18) - negative - linkPenalty;
-    };
-
-    const candidates = Array.from(document.querySelectorAll("article, main, [role='main'], section, div"))
-        .filter(isVisible);
-    const best = candidates
-        .map((element) => ({ element, score: scoreCandidate(element) }))
-        .sort((left, right) => right.score - left.score)[0];
-    const source = best?.score > 0 ? best.element : document.body;
-    const clone = source.cloneNode(true);
-    const junkSelector = [
-        "script",
-        "style",
-        "noscript",
-        "iframe",
-        "nav",
-        "footer",
-        "header",
-        "aside",
-        "form",
-        "button",
-        "input",
-        "textarea",
-        "select",
-        "svg",
-        "canvas",
-        "video",
-        "audio",
-        "[hidden]",
-        "[aria-hidden='true']",
-        "[role='banner']",
-        "[role='contentinfo']",
-        "[role='navigation']",
-        "[class*='advert']",
-        "[class*='comment']",
-        "[class*='modal']",
-        "[class*='newsletter']",
-        "[class*='promo']",
-        "[class*='related']",
-        "[class*='share']",
-        "[class*='sidebar']",
-        "[class*='sponsor']",
-        "[class*='subscribe']",
-        "[id*='advert']",
-        "[id*='comment']",
-        "[id*='newsletter']",
-        "[id*='promo']",
-        "[id*='related']",
-        "[id*='share']",
-        "[id*='sidebar']",
-        "[id*='subscribe']"
-    ].join(",");
-
-    clone.querySelectorAll(junkSelector).forEach((node) => node.remove());
-    clone.querySelectorAll("a[href]").forEach((link) => {
-        try {
-            link.href = new URL(link.getAttribute("href"), document.baseURI).href;
-        } catch {}
-    });
-    clone.querySelectorAll("img[src], source[src], picture source[src]").forEach((media) => {
-        try {
-            media.src = new URL(media.getAttribute("src"), document.baseURI).href;
-        } catch {}
-    });
-    clone.querySelectorAll("*").forEach((node) => {
-        for (const attribute of Array.from(node.attributes)) {
-            const name = attribute.name.toLowerCase();
-            const allowed = ["href", "src", "srcset", "alt", "title", "datetime", "cite", "colspan", "rowspan"];
-            if (name.startsWith("on") || name === "style" || name === "id" || name === "class" || name === "srcdoc") {
-                node.removeAttribute(attribute.name);
-            } else if (!allowed.includes(name) && !name.startsWith("aria-")) {
-                node.removeAttribute(attribute.name);
-            }
-        }
-    });
-    clone.querySelectorAll("p, li, blockquote, pre, h1, h2, h3, h4, h5, h6").forEach((node) => {
-        if (!cleanText(node.textContent) && node.querySelector("img, picture, video, iframe") === null) {
-            node.remove();
-        }
-    });
-
-    const articleText = textFor(clone);
-    if (articleText.length < 500) {
-        return { ok: false, reason: "tooShort" };
-    }
-
-    const escapeHTML = (value) => String(value || "").replace(/[&<>"']/g, (character) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        "\"": "&quot;",
-        "'": "&#39;"
-    }[character]));
-    const wordCount = articleText.split(/\s+/).filter(Boolean).length;
-    const readingMinutes = Math.max(1, Math.round(wordCount / 235));
-    const metaParts = [site, byline, `${readingMinutes} min read`].filter(Boolean);
-
-    const overlay = document.createElement("div");
-    overlay.id = "quartz-reading-mode";
-    overlay.setAttribute("role", "main");
-    const shadow = overlay.attachShadow({ mode: "open" });
-    shadow.innerHTML = `
-        <style>
-            :host {
-                all: initial;
-                position: fixed;
-                inset: 0;
-                z-index: 2147483647;
-                overflow: auto;
-                background: #fafaf8;
-                color: #202124;
-                color-scheme: light;
-                font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-                -webkit-font-smoothing: antialiased;
-            }
-
-            * {
-                box-sizing: border-box;
-            }
-
-            .shell {
-                min-height: 100%;
-                padding: clamp(28px, 5vw, 72px) clamp(20px, 7vw, 96px);
-            }
-
-            article {
-                width: min(100%, 760px);
-                margin: 0 auto;
-            }
-
-            header {
-                margin-bottom: 2.35rem;
-                padding-bottom: 1.4rem;
-                border-bottom: 1px solid rgba(32, 33, 36, 0.14);
-            }
-
-            .meta {
-                margin-bottom: 0.9rem;
-                color: #5f665f;
-                font: 500 0.82rem/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                letter-spacing: 0;
-            }
-
-            h1 {
-                margin: 0;
-                color: #17191c;
-                font-size: clamp(2rem, 4vw, 3.45rem);
-                line-height: 1.06;
-                font-weight: 720;
-                letter-spacing: 0;
-            }
-
-            .content {
-                font-size: 1.23rem;
-                line-height: 1.75;
-            }
-
-            .content :is(h1, h2, h3, h4, h5, h6) {
-                color: #1f2324;
-                font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                letter-spacing: 0;
-                line-height: 1.2;
-                margin: 2.2em 0 0.7em;
-            }
-
-            .content h1 {
-                font-size: 2rem;
-            }
-
-            .content h2 {
-                font-size: 1.55rem;
-            }
-
-            .content h3 {
-                font-size: 1.28rem;
-            }
-
-            .content p,
-            .content ul,
-            .content ol,
-            .content blockquote,
-            .content pre,
-            .content table,
-            .content figure {
-                margin: 0 0 1.25em;
-            }
-
-            .content a {
-                color: #0b6f6a;
-                text-decoration-color: rgba(11, 111, 106, 0.35);
-                text-decoration-thickness: 0.08em;
-                text-underline-offset: 0.16em;
-            }
-
-            .content img,
-            .content picture {
-                display: block;
-                max-width: 100%;
-                height: auto;
-                margin: 1.55rem auto;
-                border-radius: 6px;
-            }
-
-            .content blockquote {
-                padding-left: 1.1em;
-                border-left: 3px solid rgba(11, 111, 106, 0.42);
-                color: #49524f;
-                font-style: italic;
-            }
-
-            .content pre,
-            .content code {
-                font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-                font-size: 0.9em;
-            }
-
-            .content pre {
-                overflow: auto;
-                padding: 1rem;
-                border-radius: 6px;
-                background: rgba(32, 33, 36, 0.08);
-            }
-
-            .content table {
-                width: 100%;
-                border-collapse: collapse;
-                font-size: 0.95em;
-            }
-
-            .content th,
-            .content td {
-                padding: 0.55rem 0.65rem;
-                border-bottom: 1px solid rgba(32, 33, 36, 0.14);
-                text-align: left;
-                vertical-align: top;
-            }
-
-            @media (max-width: 620px) {
-                .shell {
-                    padding: 24px 18px 48px;
-                }
-
-                .content {
-                    font-size: 1.1rem;
-                    line-height: 1.68;
-                }
-            }
-        </style>
-        <div class="shell">
-            <article>
-                <header>
-                    <div class="meta">${escapeHTML(metaParts.join(" · "))}</div>
-                    <h1>${escapeHTML(pageTitle)}</h1>
-                </header>
-                <div class="content">${clone.innerHTML}</div>
-            </article>
-        </div>
-    `;
-
-    window.__quartzReaderMode = {
-        overlay,
-        documentOverflow: document.documentElement.style.overflow,
-        bodyOverflow: document.body.style.overflow,
-        bodyBackground: document.body.style.background
-    };
-    document.documentElement.style.overflow = "hidden";
-    document.body.style.overflow = "hidden";
-    document.body.style.background = "#fafaf8";
-    document.body.appendChild(overlay);
-
-    return { ok: true, title: pageTitle, wordCount };
-})();
-"""#
-
-    private static let exitReaderModeScript = #"""
-(() => {
-    const readerMode = window.__quartzReaderMode;
-    if (!readerMode) {
-        return { ok: true, alreadyInactive: true };
-    }
-
-    readerMode.overlay?.remove();
-    document.documentElement.style.overflow = readerMode.documentOverflow || "";
-    document.body.style.overflow = readerMode.bodyOverflow || "";
-    document.body.style.background = readerMode.bodyBackground || "";
-    delete window.__quartzReaderMode;
-
-    return { ok: true };
-})();
-"""#
 }

@@ -9,6 +9,8 @@ struct QuartzInstalledWebExtension {
     let badgeText: String
     let icon: NSImage?
     let isActionEnabled: Bool
+    let isEnabled: Bool
+    let status: String
 }
 
 @available(macOS 15.4, *)
@@ -16,9 +18,42 @@ struct QuartzInstalledWebExtension {
 final class QuartzWebExtensionSupport: NSObject {
     let controller: WKWebExtensionController
 
-    private weak var browser: BrowserController?
+    private weak var initialBrowser: BrowserController?
+    private(set) var browserTabs = [QuartzWebExtensionBrowserTab]()
+    private weak var presentedPopupWebView: WKWebView?
+    private weak var presentedPopupBrowser: BrowserController?
+    private var reportedFocus = QuartzBrowserFocusChange()
+    private var focusUpdateScheduled = false
+    private var browser: BrowserController? {
+        focusedTab?.browser
+            ?? browserTabs.first(where: { $0.browser === BrowserController.lastFocusedBrowser })?.browser
+            ?? browserTabs.first?.browser
+            ?? initialBrowser
+    }
+    var focusedTab: QuartzWebExtensionBrowserTab? {
+        let app = NSApplication.shared
+        let focusedWindow = QuartzBrowserFocus.window(
+            applicationIsActive: app.isActive,
+            keyWindow: app.keyWindow,
+            mainWindow: app.mainWindow,
+            browserWindows: browserTabs.compactMap { $0.browser?.extensionWindow },
+            popupWindow: presentedPopupWebView?.window,
+            popupOwner: presentedPopupBrowser?.extensionWindow
+        )
+        guard let focusedWindow else { return nil }
+        return browserTabs.first { $0.browser?.extensionWindow === focusedWindow }
+    }
+    private var actionTab: QuartzWebExtensionBrowserTab? {
+        browserTabs.first { $0.browser === browser }
+    }
     private var extensionContextsByPath = [String: WKWebExtensionContext]()
-    private let savedExtensionPathsKey = "QuartzInstalledExtensionPaths"
+    private let registry: QuartzExtensionRegistry
+    private let storageDirectory: URL?
+    private let permissionPrompt: @MainActor (String, Set<String>, Set<String>, Bool) -> Bool
+    private var loadErrorsByPath = [String: String]()
+    private var loadingPaths = Set<String>()
+    private var manager: QuartzExtensionManagerController?
+    var onChange: (() -> Void)?
     private let appSupportDirectoryName = "Quartz"
     private let installedExtensionsDirectoryName = "Extensions"
     private let chromeWebStoreDownloadDirectoryName = "ChromeWebStoreDownloads"
@@ -30,37 +65,99 @@ final class QuartzWebExtensionSupport: NSObject {
         return url
     }
 
-    var installedExtensionNames: [String] {
-        extensionContextsByPath.values
-            .map { displayName(for: $0) }
-            .sorted()
-    }
+    var installedExtensionNames: [String] { installedExtensions.map(\.displayName) }
 
     var installedExtensions: [QuartzInstalledWebExtension] {
-        extensionContextsByPath
-            .map { path, context in
-                let action = context.action(for: self)
-                let displayName = displayName(for: context)
-                let actionLabel = nonEmpty(action?.label) ?? displayName
-
-                return QuartzInstalledWebExtension(
-                    identifier: path,
-                    displayName: displayName,
-                    actionLabel: actionLabel,
-                    badgeText: action?.badgeText ?? "",
-                    icon: action?.icon(for: NSSize(width: 18, height: 18)),
-                    isActionEnabled: action?.isEnabled == true
-                )
-            }
-            .sorted {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-            }
+        registry.read().map { record in
+            let context = extensionContextsByPath[record.path]
+            let action = context?.action(for: actionTab)
+            let name = context.map { displayName(for: $0) } ?? record.displayName
+            return QuartzInstalledWebExtension(
+                identifier: record.path,
+                displayName: name,
+                actionLabel: nonEmpty(action?.label) ?? name,
+                badgeText: action?.badgeText ?? "",
+                icon: action?.icon(for: NSSize(width: 18, height: 18)),
+                isActionEnabled: action?.isEnabled == true,
+                isEnabled: record.isEnabled,
+                status: loadErrorsByPath[record.path] ?? (context != nil ? "Enabled" : record.isEnabled ? "Not loaded" : "Disabled")
+            )
+        }.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
-    init(browser: BrowserController, webViewConfiguration: WKWebViewConfiguration) {
-        self.browser = browser
+    func showManager() {
+        if manager == nil { manager = QuartzExtensionManagerController(support: self) }
+        manager?.reload()
+        manager?.showWindow(nil)
+        manager?.window?.makeKeyAndOrderFront(nil)
+    }
 
-        let configuration = WKWebExtensionController.Configuration.default()
+    func setEnabled(_ enabled: Bool, identifier: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        Task { @MainActor in
+            do {
+                guard !loadingPaths.contains(identifier) else { throw QuartzWebExtensionSupportError.operationInProgress }
+                guard var record = registry.read().first(where: { $0.path == identifier }) else {
+                    throw QuartzWebExtensionSupportError.missingInstalledExtension
+                }
+                if enabled {
+                    _ = try await loadExtension(at: URL(fileURLWithPath: identifier), shouldSave: false)
+                } else if let context = extensionContextsByPath[identifier] {
+                    try controller.unload(context)
+                    extensionContextsByPath.removeValue(forKey: identifier)
+                }
+                // Loading may have updated the remembered permission choices.
+                record = registry.read().first(where: { $0.path == identifier }) ?? record
+                record.isEnabled = enabled
+                saveRecord(record)
+                loadErrorsByPath.removeValue(forKey: identifier)
+                extensionsDidChange()
+                completion(.success(()))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func uninstall(identifier: String) throws {
+        guard !loadingPaths.contains(identifier) else { throw QuartzWebExtensionSupportError.operationInProgress }
+        guard var record = registry.read().first(where: { $0.path == identifier }) else {
+            throw QuartzWebExtensionSupportError.missingInstalledExtension
+        }
+        if let context = extensionContextsByPath[identifier] {
+            try controller.unload(context)
+            extensionContextsByPath.removeValue(forKey: identifier)
+        }
+        record.isEnabled = false
+        saveRecord(record)
+        defer { extensionsDidChange() }
+        if let ownedURL = QuartzExtensionRegistry.ownedRemovalURL(for: identifier, storageDirectory: try installedExtensionsDirectory()),
+           FileManager.default.fileExists(atPath: ownedURL.path) {
+            try FileManager.default.removeItem(at: ownedURL)
+        }
+        registry.write(registry.read().filter { $0.path != identifier })
+        loadErrorsByPath.removeValue(forKey: identifier)
+    }
+
+    private func extensionsDidChange() {
+        manager?.reload()
+        onChange?()
+    }
+
+    init(
+        browser: BrowserController,
+        webViewConfiguration: WKWebViewConfiguration,
+        defaults: UserDefaults = .standard,
+        storageDirectory: URL? = nil,
+        permissionPrompt: @escaping @MainActor (String, Set<String>, Set<String>, Bool) -> Bool = QuartzExtensionPermissionPrompt.request
+    ) {
+        self.initialBrowser = browser
+        self.registry = QuartzExtensionRegistry(defaults: defaults)
+        self.storageDirectory = storageDirectory
+        self.permissionPrompt = permissionPrompt
+
+        let configuration = webViewConfiguration.websiteDataStore.isPersistent
+            ? WKWebExtensionController.Configuration.default()
+            : WKWebExtensionController.Configuration.nonPersistent()
         configuration.webViewConfiguration = webViewConfiguration
         configuration.defaultWebsiteDataStore = webViewConfiguration.websiteDataStore
 
@@ -69,18 +166,80 @@ final class QuartzWebExtensionSupport: NSObject {
         super.init()
 
         controller.delegate = self
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                     NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(appKitFocusDidChange(_:)), name: name, object: nil)
+        }
+    }
+
+    func registerBrowser(_ browser: BrowserController) {
+        guard !browserTabs.contains(where: { $0.browser === browser }) else { return }
+        let tab = QuartzWebExtensionBrowserTab(browser: browser, support: self)
+        browserTabs.append(tab)
+        // Opening/closing a window also reports its contained tabs to WebKit.
+        controller.didOpenWindow(tab)
+        focusDidChange(force: true)
+    }
+
+    func unregisterBrowser(_ browser: BrowserController) {
+        guard let tab = browserTabs.first(where: { $0.browser === browser }) else { return }
+        browserTabs.removeAll { $0 === tab }
+        controller.didCloseWindow(tab)
+        tab.didClose()
+        focusDidChange(force: true)
+    }
+
+    @objc private func appKitFocusDidChange(_ notification: Notification) {
+        // A resign-key notification arrives before the new key panel is assigned.
+        // Wait until the transfer settles so a popup click never reports nil focus.
+        guard !focusUpdateScheduled else { return }
+        focusUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.focusUpdateScheduled = false
+            self.focusDidChange()
+        }
+    }
+
+    func focusDidChange(force: Bool = false) {
+        let tab = focusedTab
+        let didChange = reportedFocus.update(window: tab?.browser?.extensionWindow)
+        if force || didChange { controller.didFocusWindow(tab) }
+    }
+
+    func webViewDidChange(in browser: BrowserController) {
+        browserTabs.first { $0.browser === browser }?.observeWebView()
+    }
+
+    func tabDidChange(_ tab: QuartzWebExtensionBrowserTab, properties: WKWebExtension.TabChangedProperties) {
+        guard browserTabs.contains(where: { $0 === tab }) else { return }
+        controller.didChangeTabProperties(properties, for: tab)
+    }
+
+    @discardableResult
+    func openBrowserTab(url: URL?, context: WKWebExtensionContext, focused: Bool) -> QuartzWebExtensionBrowserTab? {
+        guard let source = browser else { return nil }
+        let newBrowser = source.openBrowserWindow(focused: focused, initialURL: url) { [weak self] target in
+            guard let self else { return }
+            self.openURLFromExtension(url ?? QuartzStartPage.url, context: context, in: target)
+        }
+        return browserTabs.first { $0.browser === newBrowser }
     }
 
     func loadSavedExtensions(completion: @escaping () -> Void) {
         Task { @MainActor in
-            for path in savedExtensionPaths() {
+            for record in registry.read() where record.isEnabled {
                 do {
-                    _ = try await loadExtension(at: URL(fileURLWithPath: path), shouldSave: false)
+                    _ = try await loadExtension(at: URL(fileURLWithPath: record.path), shouldSave: false)
                 } catch {
-                    print("Quartz extension unavailable at \(path): \(error.localizedDescription)")
+                    loadErrorsByPath[record.path] = error.localizedDescription
+                    var disabledRecord = record
+                    disabledRecord.isEnabled = false
+                    saveRecord(disabledRecord)
+                    print("Quartz extension unavailable at \(record.path): \(error.localizedDescription)")
                 }
             }
-
+            extensionsDidChange()
             completion()
         }
     }
@@ -88,9 +247,7 @@ final class QuartzWebExtensionSupport: NSObject {
     func installExtension(from url: URL, completion: @escaping (Result<String, Error>) -> Void) {
         Task { @MainActor in
             do {
-                let installedExtensionURL = try installExtensionSource(from: url)
-                let summary = try await loadExtension(at: installedExtensionURL, shouldSave: true)
-                completion(.success(summary))
+                completion(.success(try await installAndLoad(from: url)))
             } catch {
                 completion(.failure(error))
             }
@@ -100,18 +257,28 @@ final class QuartzWebExtensionSupport: NSObject {
     func installExtensionFromChromeWebStore(_ reference: String, completion: @escaping (Result<String, Error>) -> Void) {
         Task { @MainActor in
             do {
-                let extensionID = try Self.chromeWebStoreExtensionID(from: reference)
-                let downloadedPackageURL = try await downloadChromeWebStoreExtension(withID: extensionID)
-                defer {
-                    try? FileManager.default.removeItem(at: downloadedPackageURL)
+                guard let extensionID = QuartzChromeWebStoreReference.extensionID(from: reference) else {
+                    throw QuartzWebExtensionSupportError.invalidChromeWebStoreReference
                 }
-
-                let installedExtensionURL = try installExtensionSource(from: downloadedPackageURL)
-                let summary = try await loadExtension(at: installedExtensionURL, shouldSave: true)
-                completion(.success(summary))
+                let downloadedPackageURL = try await downloadChromeWebStoreExtension(withID: extensionID)
+                defer { try? FileManager.default.removeItem(at: downloadedPackageURL) }
+                completion(.success(try await installAndLoad(from: downloadedPackageURL)))
             } catch {
                 completion(.failure(error))
             }
+        }
+    }
+
+    private func installAndLoad(from sourceURL: URL) async throws -> String {
+        let installedURL = try installExtensionSource(from: sourceURL)
+        do {
+            return try await loadExtension(at: installedURL, shouldSave: true)
+        } catch {
+            // A new installation always receives a unique owned copy. Canceling leaves the original untouched.
+            if let ownedURL = QuartzExtensionRegistry.ownedRemovalURL(for: installedURL.path, storageDirectory: try installedExtensionsDirectory()) {
+                try? FileManager.default.removeItem(at: ownedURL)
+            }
+            throw error
         }
     }
 
@@ -121,7 +288,7 @@ final class QuartzWebExtensionSupport: NSObject {
         }
 
         let displayName = displayName(for: context)
-        guard let action = context.action(for: self) else {
+        guard let action = context.action(for: actionTab) else {
             throw QuartzWebExtensionSupportError.missingAction(displayName)
         }
 
@@ -129,7 +296,7 @@ final class QuartzWebExtensionSupport: NSObject {
             throw QuartzWebExtensionSupportError.disabledAction(displayName)
         }
 
-        context.performAction(for: self)
+        context.performAction(for: actionTab)
     }
 
     private func loadExtension(at url: URL, shouldSave: Bool) async throws -> String {
@@ -140,19 +307,28 @@ final class QuartzWebExtensionSupport: NSObject {
             return summary(for: existingContext, wasAlreadyLoaded: true)
         }
 
+        guard loadingPaths.insert(path).inserted else { throw QuartzWebExtensionSupportError.operationInProgress }
+        defer { loadingPaths.remove(path) }
         let resourceBaseURL = try resourceBaseURL(for: standardizedURL)
         let webExtension = try await WKWebExtension(resourceBaseURL: resourceBaseURL)
         let context = WKWebExtensionContext(for: webExtension)
 
-        grantInstallTimePermissions(to: context)
+        var record = registry.read().first { $0.path == path }
+            ?? QuartzExtensionRecord(path: path, displayName: displayName(for: context), isEnabled: true)
+        let contextID = record.contextIdentifier.flatMap(UUID.init(uuidString:)) ?? UUID()
+        record.contextIdentifier = contextID.uuidString.lowercased()
+        context.uniqueIdentifier = contextID.uuidString.lowercased()
+        context.baseURL = URL(string: "webkit-extension://\(contextID.uuidString.lowercased())")!
+        try grantInstallTimePermissions(to: context, record: &record)
 
         try controller.load(context)
         extensionContextsByPath[path] = context
 
-        if shouldSave {
-            saveExtensionPath(path)
-        }
-
+        record.displayName = displayName(for: context)
+        if shouldSave { record.isEnabled = true }
+        saveRecord(record)
+        loadErrorsByPath.removeValue(forKey: path)
+        extensionsDidChange()
         return summary(for: context, wasAlreadyLoaded: false)
     }
 
@@ -193,7 +369,7 @@ final class QuartzWebExtensionSupport: NSObject {
         }
 
         let downloadDirectoryURL = try chromeWebStoreDownloadDirectory()
-        let destinationURL = downloadDirectoryURL.appendingPathComponent("\(extensionID).crx", isDirectory: false)
+        let destinationURL = downloadDirectoryURL.appendingPathComponent("\(UUID().uuidString)-\(extensionID).crx", isDirectory: false)
 
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             try FileManager.default.removeItem(at: destinationURL)
@@ -220,27 +396,6 @@ final class QuartzWebExtensionSupport: NSObject {
         }
 
         return url
-    }
-
-    private static func chromeWebStoreExtensionID(from reference: String) throws -> String {
-        let trimmedReference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tokens = trimmedReference.components(separatedBy: CharacterSet.alphanumerics.inverted)
-
-        for token in tokens where isChromeWebStoreExtensionID(token) {
-            return token.lowercased()
-        }
-
-        throw QuartzWebExtensionSupportError.invalidChromeWebStoreReference
-    }
-
-    private static func isChromeWebStoreExtensionID(_ token: String) -> Bool {
-        let lowercasedToken = token.lowercased()
-        guard lowercasedToken.count == 32 else {
-            return false
-        }
-
-        let validCharacters = CharacterSet(charactersIn: "abcdefghijklmnop")
-        return lowercasedToken.unicodeScalars.allSatisfy { validCharacters.contains($0) }
     }
 
     private func installUnpackedExtension(from sourceURL: URL) throws -> URL {
@@ -301,7 +456,7 @@ final class QuartzWebExtensionSupport: NSObject {
         let destinationName = pathExtension.map { "\(sourceURL.deletingPathExtension().lastPathComponent).\($0)" }
             ?? sourceURL.lastPathComponent
 
-        return directoryURL.appendingPathComponent(destinationName, isDirectory: isDirectory)
+        return directoryURL.appendingPathComponent("\(UUID().uuidString)-\(destinationName)", isDirectory: isDirectory)
     }
 
     private func copyExtensionItem(from sourceURL: URL, to destinationURL: URL) throws -> URL {
@@ -400,6 +555,10 @@ final class QuartzWebExtensionSupport: NSObject {
     }
 
     private func installedExtensionsDirectory() throws -> URL {
+        if let storageDirectory {
+            try FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
+            return storageDirectory
+        }
         let appSupportURL = try quartzStorageDirectory(
             searchPathDirectory: .applicationSupportDirectory,
             unavailableError: .applicationSupportUnavailable
@@ -442,11 +601,19 @@ final class QuartzWebExtensionSupport: NSObject {
         return directoryURL
     }
 
-    private func grantInstallTimePermissions(to context: WKWebExtensionContext) {
+    private func grantInstallTimePermissions(to context: WKWebExtensionContext, record: inout QuartzExtensionRecord) throws {
+        let permissions = Set(context.webExtension.requestedPermissions.map(\.rawValue))
+        let patterns = Set(context.webExtension.requestedPermissionMatchPatterns.map(\.string))
+        let newPermissions = permissions.subtracting(record.approvedPermissions)
+        let newPatterns = patterns.subtracting(record.approvedMatchPatterns)
+        guard (newPermissions.isEmpty && newPatterns.isEmpty) || permissionPrompt(
+            displayName(for: context), newPermissions, newPatterns, true
+        ) else { throw QuartzWebExtensionSupportError.permissionDenied }
+        record.approvedPermissions.formUnion(permissions)
+        record.approvedMatchPatterns.formUnion(patterns)
         for permission in context.webExtension.requestedPermissions {
             context.setPermissionStatus(.grantedExplicitly, for: permission)
         }
-
         for pattern in context.webExtension.requestedPermissionMatchPatterns {
             context.setPermissionStatus(.grantedExplicitly, for: pattern)
         }
@@ -621,12 +788,17 @@ final class QuartzWebExtensionSupport: NSObject {
             .joined(separator: "/")
     }
 
-    private func openURLFromExtension(_ url: URL, context: WKWebExtensionContext) {
+    func openURLFromExtension(_ url: URL, context: WKWebExtensionContext, in targetBrowser: BrowserController? = nil) {
+        guard let browser = targetBrowser ?? browser else { return }
+        if QuartzURLRouting.isStandardBrowsingURL(url) || QuartzStartPage.isStartPageURL(url) {
+            browser.loadFromExtension(url)
+            return
+        }
         let owningContext = controller.extensionContext(for: url) ?? context
 
         do {
             if let sandboxedPage = try sandboxedExtensionPage(for: url, context: owningContext) {
-                browser?.loadSandboxedExtensionPage(
+                browser.loadSandboxedExtensionPage(
                     sandboxedPage.pageURL,
                     from: sandboxedPage.readAccessURL,
                     displayURL: url
@@ -638,9 +810,9 @@ final class QuartzWebExtensionSupport: NSObject {
         }
 
         if let configuration = owningContext.webViewConfiguration {
-            browser?.loadExtensionPage(url, using: configuration)
+            browser.loadExtensionPage(url, using: configuration)
         } else {
-            browser?.loadFromExtension(url)
+            browser.loadFromExtension(url)
         }
     }
 
@@ -651,19 +823,25 @@ final class QuartzWebExtensionSupport: NSObject {
         return "\(name)\(versionText) \(stateText)."
     }
 
-    private func savedExtensionPaths() -> [String] {
-        UserDefaults.standard.stringArray(forKey: savedExtensionPathsKey) ?? []
-    }
-
-    private func saveExtensionPath(_ path: String) {
-        var paths = savedExtensionPaths()
-        guard paths.contains(path) == false else {
-            return
+    func popupBrowser(for action: WKWebExtension.Action) -> BrowserController? {
+        if let associatedTab = action.associatedTab {
+            guard let tab = associatedTab as? QuartzWebExtensionBrowserTab,
+                  browserTabs.contains(where: { $0 === tab }) else { return nil }
+            return tab.browser
         }
-
-        paths.append(path)
-        UserDefaults.standard.set(paths, forKey: savedExtensionPathsKey)
+        // WebKit clears associatedTab when that tab closes. Only the context's
+        // actual global action may fall back to the focused browser.
+        guard controller.extensionContexts.contains(where: { $0.action(for: nil) === action }) else { return nil }
+        return browser
     }
+
+    private func saveRecord(_ record: QuartzExtensionRecord) {
+        var records = registry.read()
+        records.removeAll { $0.path == record.path }
+        records.append(record)
+        registry.write(records)
+    }
+
 }
 
 @available(macOS 15.4, *)
@@ -672,14 +850,14 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         _ controller: WKWebExtensionController,
         openWindowsFor extensionContext: WKWebExtensionContext
     ) -> [any WKWebExtensionWindow] {
-        [self]
+        browserTabs
     }
 
     func webExtensionController(
         _ controller: WKWebExtensionController,
         focusedWindowFor extensionContext: WKWebExtensionContext
     ) -> (any WKWebExtensionWindow)? {
-        self
+        focusedTab
     }
 
     func webExtensionController(
@@ -688,11 +866,35 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         for extensionContext: WKWebExtensionContext,
         completionHandler: @escaping ((any WKWebExtensionTab)?, Error?) -> Void
     ) {
-        if let url = configuration.url {
-            openURLFromExtension(url, context: extensionContext)
+        guard let tab = openBrowserTab(url: configuration.url, context: extensionContext, focused: configuration.shouldBeActive) else {
+            completionHandler(nil, QuartzBrowserWindowError.noBrowserWindow)
+            return
         }
+        completionHandler(tab, nil)
+    }
 
-        completionHandler(self, nil)
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        openNewWindowUsing configuration: WKWebExtension.WindowConfiguration,
+        for extensionContext: WKWebExtensionContext,
+        completionHandler: @escaping ((any WKWebExtensionWindow)?, Error?) -> Void
+    ) {
+        guard !configuration.shouldBePrivate else {
+            completionHandler(nil, QuartzBrowserWindowError.privateWindowsUnsupported)
+            return
+        }
+        guard configuration.tabs.isEmpty, configuration.tabURLs.count <= 1 else {
+            completionHandler(nil, QuartzBrowserWindowError.multipleTabsUnsupported)
+            return
+        }
+        guard let tab = openBrowserTab(url: configuration.tabURLs.first, context: extensionContext, focused: configuration.shouldBeFocused) else {
+            completionHandler(nil, QuartzBrowserWindowError.noBrowserWindow)
+            return
+        }
+        tab.applyInitialFrame(configuration.frame)
+        tab.setWindowState(configuration.windowState, for: extensionContext) { error in
+            completionHandler(error == nil ? tab : nil, error)
+        }
     }
 
     func webExtensionController(
@@ -701,8 +903,8 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         completionHandler: @escaping (Error?) -> Void
     ) {
         if let url = extensionContext.optionsPageURL {
-            openURLFromExtension(url, context: extensionContext)
-            completionHandler(nil)
+            let tab = openBrowserTab(url: url, context: extensionContext, focused: true)
+            completionHandler(tab == nil ? QuartzBrowserWindowError.noBrowserWindow : nil)
         } else {
             completionHandler(QuartzWebExtensionSupportError.missingOptionsPage)
         }
@@ -715,7 +917,9 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         for extensionContext: WKWebExtensionContext,
         completionHandler: @escaping (Set<WKWebExtension.Permission>, Date?) -> Void
     ) {
-        completionHandler(permissions, nil)
+        guard installedPath(for: extensionContext) != nil else { completionHandler([], nil); return }
+        let allowed = permissionPrompt(displayName(for: extensionContext), Set(permissions.map(\.rawValue)), [], false)
+        completionHandler(allowed ? permissions : [], nil)
     }
 
     func webExtensionController(
@@ -725,7 +929,29 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         for extensionContext: WKWebExtensionContext,
         completionHandler: @escaping (Set<WKWebExtension.MatchPattern>, Date?) -> Void
     ) {
-        completionHandler(matchPatterns, nil)
+        guard installedPath(for: extensionContext) != nil else { completionHandler([], nil); return }
+        let allowed = permissionPrompt(displayName(for: extensionContext), [], Set(matchPatterns.map(\.string)), false)
+        completionHandler(allowed ? matchPatterns : [], nil)
+    }
+
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        promptForPermissionToAccess urls: Set<URL>,
+        in tab: (any WKWebExtensionTab)?,
+        for extensionContext: WKWebExtensionContext,
+        completionHandler: @escaping (Set<URL>, Date?) -> Void
+    ) {
+        guard installedPath(for: extensionContext) != nil else { completionHandler([], nil); return }
+        let allowed = permissionPrompt(displayName(for: extensionContext), [], Set(urls.map(\.absoluteString)), false)
+        completionHandler(allowed ? urls : [], nil)
+    }
+
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        didUpdate action: WKWebExtension.Action,
+        forExtensionContext context: WKWebExtensionContext
+    ) {
+        extensionsDidChange()
     }
 
     func webExtensionController(
@@ -734,66 +960,26 @@ extension QuartzWebExtensionSupport: WKWebExtensionControllerDelegate {
         for context: WKWebExtensionContext,
         completionHandler: @escaping (Error?) -> Void
     ) {
-        guard let popover = action.popupPopover,
-              let anchorView = browser?.extensionPopupAnchorView ?? browser?.extensionWebView
+        let targetBrowser = popupBrowser(for: action)
+        guard context.isLoaded, context.webExtensionController === controller,
+              let popover = action.popupPopover,
+              let anchorView = targetBrowser?.extensionPopupAnchorView ?? targetBrowser?.extensionWebView,
+              anchorView.window?.isVisible == true
         else {
             completionHandler(QuartzWebExtensionSupportError.missingPopup)
             return
         }
 
+        presentedPopupBrowser = targetBrowser
+        presentedPopupWebView = action.popupWebView
         popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .maxY)
         completionHandler(nil)
     }
 }
 
-@available(macOS 15.4, *)
-extension QuartzWebExtensionSupport: WKWebExtensionWindow {
-    func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] {
-        [self]
-    }
-
-    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
-        self
-    }
-
-    func frame(for context: WKWebExtensionContext) -> CGRect {
-        browser?.extensionWindow?.frame ?? .null
-    }
-
-    func screenFrame(for context: WKWebExtensionContext) -> CGRect {
-        browser?.extensionWindow?.screen?.frame ?? .null
-    }
-}
-
-@available(macOS 15.4, *)
-extension QuartzWebExtensionSupport: WKWebExtensionTab {
-    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
-        self
-    }
-
-    func indexInWindow(for context: WKWebExtensionContext) -> Int {
-        0
-    }
-
-    func webView(for context: WKWebExtensionContext) -> WKWebView? {
-        browser?.extensionWebView
-    }
-
-    func url(for context: WKWebExtensionContext) -> URL? {
-        browser?.extensionWebView?.url
-    }
-
-    func pendingURL(for context: WKWebExtensionContext) -> URL? {
-        nil
-    }
-
-    func loadURL(_ url: URL, for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
-        openURLFromExtension(url, context: context)
-        completionHandler(nil)
-    }
-}
-
 private enum QuartzWebExtensionSupportError: LocalizedError {
+    case operationInProgress
+    case permissionDenied
     case missingOptionsPage
     case missingPopup
     case missingInstalledExtension
@@ -810,6 +996,10 @@ private enum QuartzWebExtensionSupportError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .operationInProgress:
+            "The extension is being loaded. Try again when loading finishes."
+        case .permissionDenied:
+            "Access was canceled. The extension was not enabled."
         case .missingOptionsPage:
             "The extension does not provide an options page."
         case .missingPopup:

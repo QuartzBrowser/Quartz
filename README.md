@@ -43,22 +43,20 @@ xattr -dr com.apple.quarantine /path/to/Quartz.app
 ```
 
 The automated release workflow uses free Ed25519 update signing without an Apple
-Developer account; see [update setup](docs/UPDATES.md). If Developer ID credentials
-are available, signing and notarization can remove the initial macOS warning:
-
-```sh
-SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ZIP_APP=1 Scripts/package-macos-app.sh
-xcrun notarytool submit dist/Quartz.zip --keychain-profile <profile> --wait
-xcrun stapler staple dist/Quartz.app
-```
+Developer account; see [update setup](docs/UPDATES.md). The
+[release checklist](docs/releases.md) covers universal app and ZIP verification,
+local ad-hoc testing, and the separate Developer ID signing and notarization
+process, including rebuilding the ZIP after stapling.
 
 ## Features
 
 - WebKit-powered browsing
+- Multiple native browser windows, including extension-created pages
 - Native local start page with direct access to search, Facet, and extensions
 - In-browser updates with verified downloads, progress, and automatic restart
 - Tiny built-in ad blocker for obvious third-party ad resources
 - Reading mode for article-focused pages
+- File downloads with a native save dialog and completion feedback
 - Facet side-panel assistant powered by OpenRouter
 - Optional Chromium-format WebExtension installation on macOS 15.4+, including Chrome Web Store downloads
 - Address/search field
@@ -68,6 +66,24 @@ xcrun stapler staple dist/Quartz.app
 ## Start Page
 
 When there is no saved browsing session, Quartz opens a self-contained local start page instead of contacting a placeholder website. Its search box uses the same URL and DuckDuckGo search routing as the native address field, and its feature cards open the existing Facet panel and Extensions menu. The Home button always returns there; a valid saved web or file URL still takes precedence at launch.
+
+Use **File > New Window** or **Command-N** to open another browser window.
+Extensions that request a new tab or window also receive a separate window,
+keeping the source page open.
+
+## Reading Mode
+
+Use the reading toolbar button or **Shift-Command-R** on an article page to show
+its text and images with simpler formatting. Toggle it again to return to the
+original page. Pages without enough article text remain unchanged.
+
+## Downloads
+
+When a website sends a file attachment or you follow a supported download link,
+Quartz opens a native **Save Download** dialog. Choose a destination and save, or
+cancel to leave the destination unchanged. After a successful transfer, the
+**Download complete** message offers **Done** and **Show in Finder**. A failed
+transfer shows an error instead of reporting a completed file.
 
 ## Updates
 
@@ -93,4 +109,12 @@ Quartz installs Chromium-format WebExtensions from the Chrome Web Store, an unpa
 
 Users can opt into extensions from a Chrome Web Store listing with the native **Install** button that appears in the Quartz toolbar, or with **Extensions > Install This Web Store Extension**. Users can also choose **Extensions > Install from Chrome Web Store...** and paste a store listing URL or extension ID. Local packages are still available through **Extensions > Install Extension from File...**. Quartz copies installed extensions into Application Support and restores them on launch.
 
+Quartz asks before granting an extension browser permissions or website access.
+Use **Extensions > Manage Extensions…** to enable, disable, or uninstall installed
+extensions. Uninstalling preserves your original source file or folder.
+
 Quartz includes a tiny built-in blocker for a few obvious third-party ad resources. The former larger bundled ad-blocking filters now live in a separate Quartz Ad Blocker extension package.
+
+Extension authors can follow the [packaging guide](docs/extensions.md) and install
+the [Hello Quartz sample](examples/extensions/hello-quartz). It includes an offline
+Manifest V3 popup with no permissions. WebExtensions require macOS 15.4 or newer.

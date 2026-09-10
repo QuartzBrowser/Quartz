@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Hello Quartz",
+  "version": "1.0.0",
+  "description": "A small, offline popup for trying extensions in Quartz.",
+  "action": {
+    "default_title": "Hello Quartz",
+    "default_popup": "popup.html"
+  }
+}

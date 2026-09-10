@@ -23,7 +23,8 @@ let package = Package(
         ),
         .testTarget(
             name: "QuartzTests",
-            dependencies: ["Quartz"]
+            dependencies: ["Quartz"],
+            resources: [.copy("Fixtures")]
         )
     ]
 )

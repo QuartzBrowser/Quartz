@@ -39,6 +39,30 @@ swift build
 Most browser UI work lives under `Sources/Quartz/`. Keep changes close to the
 existing AppKit and WebKit flow unless the feature really needs a new surface.
 
+### Browser behavior checks
+
+Run the focused reader and download checks with:
+
+```sh
+swift test --filter QuartzReaderModeTests
+swift test --filter 'QuartzDownloadTests|QuartzDownloadDestinationTests'
+```
+
+The reader tests load the HTML fixtures under `Tests/QuartzTests/Fixtures/Reader`
+in a real WebKit view. They cover article text, images, surrounding clutter, and
+short pages, including restoring the original document and styles when reading
+mode exits. Keep new extraction regressions as small HTML fixtures.
+
+For changes to downloads, also test the packaged browser against both a response
+with `Content-Disposition: attachment` and an HTML link with the `download`
+attribute. Confirm the **Save Download** panel appears, save the file, check its
+contents, and use **Show in Finder** from the completion message. Repeat with a
+canceled save dialog and an interrupted or failed network transfer; existing
+destination files must remain intact and failures must not report success.
+
+The [window API diagnostic extension](docs/extensions.md#optional-window-api-diagnostics)
+provides manual checks for extension-created pages and window queries.
+
 ## Packaging
 
 Create a local `.app` bundle with:
@@ -62,6 +86,8 @@ Before opening a pull request:
 - Run `swift build` and, when relevant, `swift run Quartz`.
 - For packaging changes, run `bash -n Scripts/package-macos-app.sh` and smoke
   test `Scripts/package-macos-app.sh`.
+- For extension changes, follow the [sample installation checks](docs/extensions.md)
+  on macOS 15.4 or newer, including the popup and persistence after restarting.
 - Do not commit local build output such as `.build/`, `dist/`, or `.swiftpm/`.
 
 In the pull request description, include:
@@ -83,6 +109,12 @@ changes:
 - `fix: describe the bug fix` for patch releases
 - `feat: describe the user-facing feature` for minor releases
 - `feat!: describe the breaking change` for major releases
+
+Follow the [release signing and notarization checklist](docs/releases.md) for
+universal packaging, archive verification, and a packaged-app smoke test. It
+distinguishes the automated ad-hoc releases from the optional Developer ID and
+Apple notarization process. Record checks that require unavailable credentials
+or hardware as unrun.
 
 ## Style
 

@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/QuartzBrowser/Quartz/compare/v0.6.0...v0.7.0) (2026-09-10)
+
+
+### Features
+
+* add native Quartz start page ([3698156](https://github.com/QuartzBrowser/Quartz/commit/36981568b2c954c79dd1a387267ed2493b78392c))
+
 # [0.6.0](https://github.com/QuartzBrowser/Quartz/compare/v0.5.0...v0.6.0) (2026-06-26)
 
 

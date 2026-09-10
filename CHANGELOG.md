@@ -1,3 +1,10 @@
+# [0.10.0](https://github.com/QuartzBrowser/Quartz/compare/v0.9.0...v0.10.0) (2026-09-10)
+
+
+### Features
+
+* **updates:** add one-click verified browser updates ([45640f8](https://github.com/QuartzBrowser/Quartz/commit/45640f873353fe5876fcedf6743e4e2916778247))
+
 # [0.9.0](https://github.com/QuartzBrowser/Quartz/compare/v0.8.0...v0.9.0) (2026-09-10)
 
 

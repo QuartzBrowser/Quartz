@@ -41,6 +41,28 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var didStart = false
     private var sessionURL: URL?
     private var isShowingStartPage = false
+    private var didRestoreSession = false
+    private var pendingUpdateReleaseURL: URL?
+    private var checkForUpdatesMenuItem: NSMenuItem?
+    private var automaticUpdatesMenuItem: NSMenuItem?
+    private lazy var updateNotifications = QuartzUpdateNotifications { [weak self] url in
+        self?.openUpdateRelease(url)
+    }
+    private lazy var updateController: QuartzUpdateController = QuartzUpdateController(
+        currentVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+        notify: { [weak self] release in
+            await self?.updateNotifications.deliver(release, shouldDeliver: { [weak self] in
+                self?.updateController.automaticallyChecksForUpdates == true
+            }) ?? false
+        },
+        present: { [weak self] result in
+            self?.presentUpdateResult(result) ?? false
+        },
+        checkingChanged: { [weak self] checking in
+            self?.checkForUpdatesMenuItem?.isEnabled = !checking
+            self?.checkForUpdatesMenuItem?.title = checking ? "Checking for Updates…" : "Check for Updates…"
+        }
+    )
 
     private let addressField = NSTextField()
     private let backButton = BrowserController.makeIconButton(symbolName: "chevron.left", description: "Back")
@@ -74,6 +96,11 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         start()
+        updateController.start()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        updateController.checkAutomatically()
     }
 
     func start() {
@@ -85,6 +112,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
         buildMenu()
         buildWindow()
+        // Install the delegate before launch finishes so notification clicks can reopen Quartz.
+        _ = updateNotifications
         loadSavedExtensionsThenRestoreSession()
     }
 
@@ -93,6 +122,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        updateController.stop()
         activeFacetTask?.cancel()
         facetModelOptionsTask?.cancel()
         saveCurrentSession()
@@ -237,6 +267,21 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.autoenablesItems = false
+        let checkItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        checkItem.target = self
+        appMenu.addItem(checkItem)
+        checkForUpdatesMenuItem = checkItem
+        let automaticItem = NSMenuItem(
+            title: "Automatically Check for Updates",
+            action: #selector(toggleAutomaticUpdates(_:)),
+            keyEquivalent: ""
+        )
+        automaticItem.target = self
+        automaticItem.state = updateController.automaticallyChecksForUpdates ? .on : .off
+        appMenu.addItem(automaticItem)
+        automaticUpdatesMenuItem = automaticItem
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Quartz", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
@@ -401,6 +446,56 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         embed(webView: newWebView)
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        Task { await updateController.check(manually: true) }
+    }
+
+    @objc private func toggleAutomaticUpdates(_ sender: Any?) {
+        updateController.automaticallyChecksForUpdates.toggle()
+        automaticUpdatesMenuItem?.state = updateController.automaticallyChecksForUpdates ? .on : .off
+        if updateController.automaticallyChecksForUpdates {
+            updateController.checkAutomatically()
+        }
+    }
+
+    private func openUpdateRelease(_ url: URL) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+        if didRestoreSession {
+            load(url)
+        } else {
+            pendingUpdateReleaseURL = url
+        }
+    }
+
+    private func presentUpdateResult(_ result: QuartzUpdateCheckResult) -> Bool {
+        guard window.attachedSheet == nil else { return false }
+        let alert = NSAlert()
+        switch result {
+        case .available(let release):
+            alert.messageText = "Quartz \(release.version) Is Available"
+            alert.informativeText = "A new version of Quartz has been released. View the release for details."
+            alert.addButton(withTitle: "View Release")
+            alert.addButton(withTitle: "Later")
+        case .upToDate(let version):
+            alert.messageText = "Quartz Is Up to Date"
+            alert.informativeText = "You’re running Quartz \(version)."
+        case .unavailableVersion:
+            alert.messageText = "Update Checking Unavailable"
+            alert.informativeText = "This development build has no installed version. Run a packaged Quartz.app to check for updates."
+        case .failed:
+            alert.messageText = "Unable to Check for Updates"
+            alert.informativeText = "The release service could not be reached or returned an invalid response. Please try again later."
+        }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertFirstButtonReturn, case .available(let release) = result {
+                self?.openUpdateRelease(release.url)
+            }
+        }
+        return true
     }
 
     @objc private func addressSubmitted(_ sender: Any?) {
@@ -966,7 +1061,11 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func restoreSession() {
-        if let restoredURL = restoredSessionURL() {
+        didRestoreSession = true
+        if let releaseURL = pendingUpdateReleaseURL {
+            pendingUpdateReleaseURL = nil
+            load(releaseURL)
+        } else if let restoredURL = restoredSessionURL() {
             load(restoredURL)
         } else {
             loadStartPage()

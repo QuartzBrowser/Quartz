@@ -54,6 +54,7 @@ xcrun stapler staple dist/Quartz.app
 
 - WebKit-powered browsing
 - Native local start page with direct access to search, Facet, and extensions
+- Automatic notifications for new Quartz releases, with a manual update check
 - Tiny built-in ad blocker for obvious third-party ad resources
 - Reading mode for article-focused pages
 - Facet side-panel assistant powered by OpenRouter
@@ -65,6 +66,14 @@ xcrun stapler staple dist/Quartz.app
 ## Start Page
 
 When there is no saved browsing session, Quartz opens a self-contained local start page instead of contacting a placeholder website. Its search box uses the same URL and DuckDuckGo search routing as the native address field, and its feature cards open the existing Facet panel and Extensions menu. The Home button always returns there; a valid saved web or file URL still takes precedence at launch.
+
+## Update Notifications
+
+Packaged copies of Quartz check the public GitHub release feed on launch and about once an hour while running. Checks are limited to once per hour across launches. Quartz announces each newer stable version once; clicking the notification opens its release page. Quartz asks for macOS notification permission when it first finds an update. If notifications are unavailable, it shows a notice in the browser window instead.
+
+Use **Quartz > Check for Updates…** to check immediately, or turn off **Quartz > Automatically Check for Updates** to disable automatic checks. Manual checks still work when automatic checking is off. Updates are installed manually from the release page when a download is available. Checks do not run while Quartz is quit.
+
+Update checks send an unauthenticated request to GitHub, without browsing history or Facet data. Running with `swift run Quartz` has no app-bundle version, so update checking requires a packaged `Quartz.app`.
 
 ## Facet
 

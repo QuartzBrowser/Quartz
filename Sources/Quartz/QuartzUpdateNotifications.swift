@@ -1,6 +1,17 @@
 import AppKit
 import UserNotifications
 
+struct QuartzNotificationAuthorization: Sendable {
+    let needsAuthorization: Bool
+    let canDeliver: Bool
+
+    init(status: UNAuthorizationStatus, alertSetting: UNNotificationSetting, notificationCenterSetting: UNNotificationSetting) {
+        needsAuthorization = status == .notDetermined
+        canDeliver = (status == .authorized || status == .provisional)
+            && (alertSetting == .enabled || notificationCenterSetting == .enabled)
+    }
+}
+
 @MainActor
 final class QuartzUpdateNotifications: NSObject, UNUserNotificationCenterDelegate {
     private static let identifier = "Quartz.updateAvailable"
@@ -22,15 +33,13 @@ final class QuartzUpdateNotifications: NSObject, UNUserNotificationCenterDelegat
     func deliver(_ release: QuartzUpdateRelease, shouldDeliver: () -> Bool) async -> Bool {
         guard let center, !Task.isCancelled, shouldDeliver() else { return false }
         do {
-            var settings = await center.notificationSettings()
-            if settings.authorizationStatus == .notDetermined {
+            var settings = await Self.authorizationSettings(for: center)
+            if settings.needsAuthorization {
                 // Ask in context, only once an update actually exists.
-                guard try await center.requestAuthorization(options: [.alert]) else { return false }
-                settings = await center.notificationSettings()
+                guard try await Self.requestAuthorization(for: center) else { return false }
+                settings = await Self.authorizationSettings(for: center)
             }
-            guard !Task.isCancelled, shouldDeliver(),
-                  settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional,
-                  settings.alertSetting == .enabled || settings.notificationCenterSetting == .enabled
+            guard !Task.isCancelled, shouldDeliver(), settings.canDeliver
             else { return false }
 
             let content = UNMutableNotificationContent()
@@ -39,10 +48,51 @@ final class QuartzUpdateNotifications: NSObject, UNUserNotificationCenterDelegat
             content.userInfo = ["releaseURL": release.url.absoluteString]
             // Replace an older notice instead of accumulating stale updates.
             center.removeDeliveredNotifications(withIdentifiers: [Self.identifier])
-            try await center.add(UNNotificationRequest(identifier: Self.identifier, content: content, trigger: nil))
+            try await Self.submit(
+                UNNotificationRequest(identifier: Self.identifier, content: content, trigger: nil),
+                to: center
+            )
             return true
         } catch {
             return false
+        }
+    }
+
+    private static func authorizationSettings(for center: UNUserNotificationCenter) async -> QuartzNotificationAuthorization {
+        await withCheckedContinuation { continuation in
+            // Older SDKs do not mark UNNotificationSettings as Sendable. Read it on
+            // the callback's queue and send only immutable values back to the main actor.
+            center.getNotificationSettings { @Sendable settings in
+                continuation.resume(returning: QuartzNotificationAuthorization(
+                    status: settings.authorizationStatus,
+                    alertSetting: settings.alertSetting,
+                    notificationCenterSetting: settings.notificationCenterSetting
+                ))
+            }
+        }
+    }
+
+    private static func requestAuthorization(for center: UNUserNotificationCenter) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            center.requestAuthorization(options: [.alert]) { @Sendable granted, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+    }
+
+    private static func submit(_ request: UNNotificationRequest, to center: UNUserNotificationCenter) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            center.add(request) { @Sendable error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
         }
     }
 

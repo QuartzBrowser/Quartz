@@ -1,0 +1,46 @@
+name: build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and package (Xcode 16.4)
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Run tests
+        run: swift test
+
+      - name: Package universal macOS app
+        run: Scripts/package-macos-app.sh
+        env:
+          ZIP_APP: "1"
+
+      - name: Verify universal package
+        run: |
+          xcrun lipo dist/Quartz.app/Contents/MacOS/Quartz -verify_arch arm64 x86_64
+          unzip -t dist/Quartz.zip

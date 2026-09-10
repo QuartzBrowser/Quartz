@@ -39,6 +39,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var facetMessages = [(role: String, content: String)]()
     private var didStart = false
     private var sessionURL: URL?
+    private var isShowingStartPage = false
 
     private let addressField = NSTextField()
     private let backButton = BrowserController.makeIconButton(symbolName: "chevron.left", description: "Back")
@@ -67,7 +68,6 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var isReaderModeActive = false
     private var isFacetPanelVisible = false
 
-    private let homeURL = URL(string: "https://www.example.com")!
     private static let savedSessionURLKey = "Quartz.savedSession.url"
     private static let sandboxedExtensionPageScheme = "quartz-extension-sandbox"
 
@@ -106,6 +106,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore.default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.setURLSchemeHandler(
+            QuartzStartPageSchemeHandler(),
+            forURLScheme: QuartzStartPage.scheme
+        )
         let userContentController = WKUserContentController()
         configuration.userContentController = userContentController
         adBlocker.connect(to: userContentController)
@@ -433,7 +437,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     @objc private func goHome(_ sender: Any?) {
-        load(homeURL)
+        loadStartPage()
     }
 
     @objc private func toggleReaderMode(_ sender: Any?) {
@@ -940,13 +944,14 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     private func load(_ url: URL) {
         displayURLOverride = nil
+        let isStartPageRequest = QuartzStartPage.isStartPageURL(url)
 
-        if Self.isStandardBrowsingURL(url), webView !== standardWebView {
+        if (Self.isStandardBrowsingURL(url) || isStartPageRequest), webView !== standardWebView {
             switchActiveWebView(to: standardWebView)
         }
 
         sessionURL = url
-        addressField.stringValue = url.absoluteString
+        addressField.stringValue = isStartPageRequest ? "" : url.absoluteString
 
         if url.isFileURL {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
@@ -958,10 +963,24 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func restoreSession() {
-        load(restoredSessionURL() ?? homeURL)
+        if let restoredURL = restoredSessionURL() {
+            load(restoredURL)
+        } else {
+            loadStartPage()
+        }
+    }
+
+    private func loadStartPage() {
+        load(QuartzStartPage.url)
     }
 
     private func saveCurrentSession() {
+        if isShowingStartPage || QuartzStartPage.isStartPageURL(webView?.url) {
+            UserDefaults.standard.removeObject(forKey: Self.savedSessionURLKey)
+            _ = UserDefaults.standard.synchronize()
+            return
+        }
+
         guard let url = webView?.url ?? sessionURL,
               Self.isRestorableSessionURL(url)
         else {
@@ -984,23 +1003,11 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private static func isRestorableSessionURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased() else {
-            return false
-        }
-
-        return isStandardBrowsingScheme(scheme)
+        QuartzURLRouting.isRestorableSessionURL(url)
     }
 
     private static func isStandardBrowsingURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased() else {
-            return false
-        }
-
-        return isStandardBrowsingScheme(scheme)
-    }
-
-    private static func isStandardBrowsingScheme(_ scheme: String) -> Bool {
-        ["http", "https", "file"].contains(scheme)
+        QuartzURLRouting.isStandardBrowsingURL(url)
     }
 
     private static func sandboxedExtensionPageURL(for pageURL: URL, in resourceRootURL: URL) -> URL? {
@@ -1020,31 +1027,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func normalizedURL(from text: String) -> URL? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-
-        if let url = URL(string: trimmed),
-           let scheme = url.scheme?.lowercased(),
-           ["http", "https", "file"].contains(scheme) {
-            return url
-        }
-
-        if looksLikeHost(trimmed), let url = URL(string: "https://\(trimmed)") {
-            return url
-        }
-
-        var components = URLComponents(string: "https://duckduckgo.com/")!
-        components.queryItems = [URLQueryItem(name: "q", value: trimmed)]
-        return components.url
-    }
-
-    private func looksLikeHost(_ text: String) -> Bool {
-        text == "localhost"
-            || text.contains(".")
-            || text.hasPrefix("localhost:")
-            || text.range(of: #"^\d{1,3}(\.\d{1,3}){3}(:\d+)?$"#, options: .regularExpression) != nil
+        QuartzURLRouting.normalizedURL(from: text)
     }
 
     private func updateControls() {
@@ -1374,7 +1357,60 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         updateControls()
     }
 
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+    ) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+
+        if QuartzStartPage.isActionURL(url) {
+            decisionHandler(.cancel)
+
+            guard webView === self.webView,
+                  webView === standardWebView,
+                  let action = QuartzStartPage.authorizedAction(
+                      for: url,
+                      sourcePageURL: navigationAction.sourceFrame.request.url,
+                      sourceIsMainFrame: navigationAction.sourceFrame.isMainFrame
+                  )
+            else {
+                return
+            }
+
+            handleStartPageAction(action)
+            return
+        }
+
+        decisionHandler(.allow)
+    }
+
+    private func handleStartPageAction(_ action: QuartzStartPageAction) {
+        switch action {
+        case .navigate(let text):
+            guard let url = normalizedURL(from: text) else {
+                window.makeFirstResponder(addressField)
+                return
+            }
+            load(url)
+        case .showFacet:
+            setFacetPanelVisible(true)
+        case .showExtensions:
+            showExtensionsMenu(extensionsButton)
+        }
+    }
+
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        isShowingStartPage = webView === standardWebView
+            && QuartzStartPage.isStartPageURL(webView.url)
+        if isShowingStartPage {
+            sessionURL = QuartzStartPage.url
+            addressField.stringValue = ""
+        }
+
         if isReaderModeActive {
             isReaderModeActive = false
         }
@@ -1385,10 +1421,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let url = webView.url {
             let displayURL = displayURLOverride ?? url
-            sessionURL = displayURL
-            addressField.stringValue = displayURL.absoluteString
+            isShowingStartPage = QuartzStartPage.isStartPageURL(displayURL)
+            sessionURL = isShowingStartPage ? QuartzStartPage.url : displayURL
+            addressField.stringValue = isShowingStartPage ? "" : displayURL.absoluteString
         }
-        window.title = webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz"
+        window.title = isShowingStartPage
+            ? "Quartz"
+            : (webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz")
         updateControls()
     }
 

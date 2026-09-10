@@ -53,6 +53,7 @@ xcrun stapler staple dist/Quartz.app
 ## Features
 
 - WebKit-powered browsing
+- Native local start page with direct access to search, Facet, and extensions
 - Tiny built-in ad blocker for obvious third-party ad resources
 - Reading mode for article-focused pages
 - Facet side-panel agent powered by the local Codex CLI
@@ -60,6 +61,10 @@ xcrun stapler staple dist/Quartz.app
 - Address/search field
 - Back, forward, reload, stop, home, reading, and Facet controls
 - Basic keyboard menu items
+
+## Start Page
+
+When there is no saved browsing session, Quartz opens a self-contained local start page instead of contacting a placeholder website. Its search box uses the same URL and DuckDuckGo search routing as the native address field, and its feature cards open the existing Facet panel and Extensions menu. The Home button always returns there; a valid saved web or file URL still takes precedence at launch.
 
 ## Facet
 

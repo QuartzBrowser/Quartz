@@ -13,6 +13,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Quartz"
+        ),
+        .testTarget(
+            name: "QuartzTests",
+            dependencies: ["Quartz"]
         )
     ]
 )

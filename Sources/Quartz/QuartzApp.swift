@@ -45,22 +45,20 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var pendingUpdateReleaseURL: URL?
     private var checkForUpdatesMenuItem: NSMenuItem?
     private var automaticUpdatesMenuItem: NSMenuItem?
-    private lazy var updateNotifications = QuartzUpdateNotifications { [weak self] url in
-        self?.openUpdateRelease(url)
-    }
+    private let updateProgressIndicator = NSProgressIndicator()
     private lazy var updateController: QuartzUpdateController = QuartzUpdateController(
-        currentVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-        notify: { [weak self] release in
-            await self?.updateNotifications.deliver(release, shouldDeliver: { [weak self] in
-                self?.updateController.automaticallyChecksForUpdates == true
-            }) ?? false
+        stateChanged: { [weak self] state in
+            self?.updateUpdateControls(state)
         },
-        present: { [weak self] result in
-            self?.presentUpdateResult(result) ?? false
+        presentMessage: { [weak self] title, message, acknowledgement in
+            guard let self else { acknowledgement(); return }
+            self.presentUpdateMessage(title: title, message: message, acknowledgement: acknowledgement)
         },
-        checkingChanged: { [weak self] checking in
-            self?.checkForUpdatesMenuItem?.isEnabled = !checking
-            self?.checkForUpdatesMenuItem?.title = checking ? "Checking for Updates…" : "Check for Updates…"
+        openInformationURL: { [weak self] url in
+            self?.openUpdateRelease(url)
+        },
+        prepareForRelaunch: { [weak self] in
+            self?.saveCurrentSession()
         }
     )
 
@@ -78,6 +76,15 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         title: "Install",
         symbolName: "puzzlepiece.extension.fill",
         description: "Install this Chrome Web Store extension"
+    )
+    private let updateButton = BrowserController.makeCommandButton(
+        title: "Update & Restart",
+        symbolName: "arrow.down.circle.fill",
+        description: "Download, verify and install the Quartz update, then restart"
+    )
+    private let cancelUpdateButton = BrowserController.makeIconButton(
+        symbolName: "xmark.circle",
+        description: "Cancel update"
     )
     private let adBlocker = QuartzAdBlocker()
     private var adBlockerMenuItem: NSMenuItem?
@@ -99,10 +106,6 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         updateController.start()
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) {
-        updateController.checkAutomatically()
-    }
-
     func start() {
         guard didStart == false else {
             return
@@ -112,8 +115,6 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
         buildMenu()
         buildWindow()
-        // Install the delegate before launch finishes so notification clicks can reopen Quartz.
-        _ = updateNotifications
         loadSavedExtensionsThenRestoreSession()
     }
 
@@ -122,7 +123,6 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        updateController.stop()
         activeFacetTask?.cancel()
         facetModelOptionsTask?.cancel()
         saveCurrentSession()
@@ -176,6 +176,16 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         configure(button: facetButton, action: #selector(toggleFacetPanel(_:)))
         configure(button: extensionsButton, action: #selector(showExtensionsMenu(_:)))
         configure(button: webStoreInstallButton, action: #selector(installCurrentChromeWebStoreExtension(_:)))
+        configure(button: updateButton, action: #selector(performUpdateAction(_:)))
+        configure(button: cancelUpdateButton, action: #selector(cancelUpdate(_:)))
+        updateProgressIndicator.style = .bar
+        updateProgressIndicator.controlSize = .small
+        updateProgressIndicator.minValue = 0
+        updateProgressIndicator.maxValue = 1
+        updateProgressIndicator.translatesAutoresizingMaskIntoConstraints = false
+        updateProgressIndicator.widthAnchor.constraint(equalToConstant: 50).isActive = true
+        updateProgressIndicator.setAccessibilityLabel("Quartz update progress")
+        updateUpdateControls(.idle)
         webStoreInstallButton.isHidden = true
         updateAdBlockerControls()
         updateExtensionsButton()
@@ -193,7 +203,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             extensionsButton,
             webStoreInstallButton,
             addressField,
-            goButton
+            goButton,
+            updateButton,
+            updateProgressIndicator,
+            cancelUpdateButton
         ])
         toolbar.orientation = .horizontal
         toolbar.alignment = .centerY
@@ -449,15 +462,20 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     @objc private func checkForUpdates(_ sender: Any?) {
-        Task { await updateController.check(manually: true) }
+        updateController.checkForUpdates()
+    }
+
+    @objc private func performUpdateAction(_ sender: Any?) {
+        updateController.performPrimaryAction()
+    }
+
+    @objc private func cancelUpdate(_ sender: Any?) {
+        updateController.cancel()
     }
 
     @objc private func toggleAutomaticUpdates(_ sender: Any?) {
         updateController.automaticallyChecksForUpdates.toggle()
         automaticUpdatesMenuItem?.state = updateController.automaticallyChecksForUpdates ? .on : .off
-        if updateController.automaticallyChecksForUpdates {
-            updateController.checkAutomatically()
-        }
     }
 
     private func openUpdateRelease(_ url: URL) {
@@ -471,31 +489,72 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
     }
 
-    private func presentUpdateResult(_ result: QuartzUpdateCheckResult) -> Bool {
-        guard window.attachedSheet == nil else { return false }
+    private func presentUpdateMessage(title: String, message: String, acknowledgement: @escaping () -> Void) {
+        guard let window else { acknowledgement(); return }
         let alert = NSAlert()
-        switch result {
-        case .available(let release):
-            alert.messageText = "Quartz \(release.version) Is Available"
-            alert.informativeText = "A new version of Quartz has been released. View the release for details."
-            alert.addButton(withTitle: "View Release")
-            alert.addButton(withTitle: "Later")
-        case .upToDate(let version):
-            alert.messageText = "Quartz Is Up to Date"
-            alert.informativeText = "You’re running Quartz \(version)."
-        case .unavailableVersion:
-            alert.messageText = "Update Checking Unavailable"
-            alert.informativeText = "This development build has no installed version. Run a packaged Quartz.app to check for updates."
-        case .failed:
-            alert.messageText = "Unable to Check for Updates"
-            alert.informativeText = "The release service could not be reached or returned an invalid response. Please try again later."
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { _ in acknowledgement() }
+    }
+
+    private func updateUpdateControls(_ state: QuartzUpdateState) {
+        updateButton.isHidden = state == .idle
+        updateButton.isEnabled = false
+        cancelUpdateButton.isHidden = !updateController.canCancel
+        updateProgressIndicator.isHidden = true
+        updateProgressIndicator.stopAnimation(nil)
+        checkForUpdatesMenuItem?.isEnabled = state != .checking
+        checkForUpdatesMenuItem?.title = state == .checking ? "Checking for Updates…" : "Check for Updates…"
+
+        switch state {
+        case .idle:
+            break
+        case .checking:
+            updateButton.title = "Checking…"
+            updateButton.toolTip = "Checking for a new Quartz release"
+            showUpdateProgress(nil)
+        case .available(let version):
+            updateButton.title = "Update & Restart"
+            updateButton.toolTip = "Install Quartz \(version) and restart. Your current page will be restored."
+            updateButton.isEnabled = true
+        case .informationOnly(let version, _):
+            updateButton.title = "Update Details"
+            updateButton.toolTip = "Read the update instructions for Quartz \(version)"
+            updateButton.isEnabled = true
+        case .downloading(let progress):
+            updateButton.title = "Downloading…"
+            updateButton.toolTip = "Downloading the Quartz update. You can keep browsing."
+            showUpdateProgress(progress)
+        case .extracting(let progress):
+            updateButton.title = "Preparing…"
+            updateButton.toolTip = "Verifying and preparing the update for installation"
+            showUpdateProgress(progress)
+        case .readyToRestart:
+            updateButton.title = "Update & Restart"
+            updateButton.toolTip = "Install the prepared Quartz update and restart"
+            updateButton.isEnabled = true
+        case .installing:
+            updateButton.title = "Restarting…"
+            updateButton.toolTip = "Installing Quartz. Click to retry restarting if the application has delayed quitting."
+            updateButton.isEnabled = true
+            showUpdateProgress(nil)
+        case .failed(let message):
+            updateButton.title = "Retry Update"
+            updateButton.toolTip = message
+            updateButton.isEnabled = true
         }
-        alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertFirstButtonReturn, case .available(let release) = result {
-                self?.openUpdateRelease(release.url)
-            }
+        updateButton.setAccessibilityLabel(updateButton.title)
+    }
+
+    private func showUpdateProgress(_ progress: Double?) {
+        updateProgressIndicator.isHidden = false
+        updateProgressIndicator.isIndeterminate = progress == nil
+        if let progress {
+            updateProgressIndicator.doubleValue = progress
+        } else {
+            updateProgressIndicator.startAnimation(nil)
         }
-        return true
     }
 
     @objc private func addressSubmitted(_ sender: Any?) {

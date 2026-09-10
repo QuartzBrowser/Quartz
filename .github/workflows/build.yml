@@ -44,3 +44,6 @@ jobs:
         run: |
           xcrun lipo dist/Quartz.app/Contents/MacOS/Quartz -verify_arch arm64 x86_64
           unzip -t dist/Quartz.zip
+
+      - name: Verify update signing and tamper rejection with disposable keys
+        run: Scripts/test-update-packaging.sh

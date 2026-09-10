@@ -1,150 +1,178 @@
 import Foundation
+import Sparkle
 
-enum QuartzUpdateCheckResult: Equatable {
-    case available(QuartzUpdateRelease)
-    case upToDate(String)
-    case unavailableVersion
-    case failed
-}
-
-/// Coordinates periodic checks and remembers announcements across launches.
+/// Owns Sparkle's update cycle. Sparkle downloads, verifies, replaces and relaunches the app.
 @MainActor
-final class QuartzUpdateController {
-    static let checkInterval: TimeInterval = 60 * 60
-    private static let automaticChecksKey = "Quartz.updates.automaticChecks"
-    private static let lastCheckKey = "Quartz.updates.lastCheck"
-    private static let lastAnnouncedVersionKey = "Quartz.updates.lastAnnouncedVersion"
+final class QuartzUpdateController: NSObject, SPUUpdaterDelegate {
+    private static let automaticChecksKey = "SUEnableAutomaticChecks"
+    private static let legacyAutomaticChecksKey = "Quartz.updates.automaticChecks"
 
-    private let currentVersion: String?
+    private let bundle: Bundle
     private let defaults: UserDefaults
-    private let now: () -> Date
-    private let fetchUpdate: (String) async throws -> QuartzUpdateRelease?
-    private let notify: (QuartzUpdateRelease) async -> Bool
-    private let present: (QuartzUpdateCheckResult) -> Bool
-    private let checkingChanged: (Bool) -> Void
-    private var timer: Timer?
-    private var automaticTask: Task<Void, Never>?
-    private var isChecking = false
-    private var manualCheckRequested = false
-    private var stopped = false
+    private let presentMessage: (String, String, @escaping () -> Void) -> Void
+    private let prepareForRelaunch: () -> Void
+    private let userDriver: QuartzUpdateUserDriver
+    private var updater: SPUUpdater?
+    private var startupError: String?
+    private var manualCheckPending = false
+
+    var isConfigured: Bool { Self.configurationIssue(in: bundle) == nil }
+    var hasStarted: Bool { updater != nil }
+    var canCancel: Bool { userDriver.canCancel }
 
     var automaticallyChecksForUpdates: Bool {
-        get { defaults.object(forKey: Self.automaticChecksKey) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Self.automaticChecksKey) }
+        get {
+            updater?.automaticallyChecksForUpdates
+                ?? (defaults.object(forKey: Self.automaticChecksKey) as? Bool)
+                ?? (bundle.object(forInfoDictionaryKey: Self.automaticChecksKey) as? Bool)
+                ?? true
+        }
+        set {
+            if let updater {
+                updater.automaticallyChecksForUpdates = newValue
+            } else {
+                defaults.set(newValue, forKey: Self.automaticChecksKey)
+            }
+        }
     }
 
     init(
-        currentVersion: String?,
+        bundle: Bundle = .main,
         defaults: UserDefaults = .standard,
-        now: @escaping () -> Date = Date.init,
-        fetchUpdate: @escaping (String) async throws -> QuartzUpdateRelease? = {
-            try await QuartzUpdateClient().latestUpdate(currentVersion: $0)
-        },
-        notify: @escaping (QuartzUpdateRelease) async -> Bool,
-        present: @escaping (QuartzUpdateCheckResult) -> Bool,
-        checkingChanged: @escaping (Bool) -> Void = { _ in }
+        stateChanged: @escaping (QuartzUpdateState) -> Void,
+        presentMessage: @escaping (String, String, @escaping () -> Void) -> Void,
+        openInformationURL: @escaping (URL) -> Void,
+        prepareForRelaunch: @escaping () -> Void
     ) {
-        self.currentVersion = currentVersion
+        self.bundle = bundle
         self.defaults = defaults
-        self.now = now
-        self.fetchUpdate = fetchUpdate
-        self.notify = notify
-        self.present = present
-        self.checkingChanged = checkingChanged
+        self.presentMessage = presentMessage
+        self.prepareForRelaunch = prepareForRelaunch
+        Self.migrateAutomaticCheckPreference(defaults: defaults)
+        userDriver = QuartzUpdateUserDriver(
+            automaticallyChecksForUpdates: {
+                (defaults.object(forKey: Self.automaticChecksKey) as? Bool)
+                    ?? (bundle.object(forInfoDictionaryKey: Self.automaticChecksKey) as? Bool)
+                    ?? true
+            },
+            stateChanged: stateChanged,
+            presentMessage: presentMessage,
+            openInformationURL: openInformationURL
+        )
+        super.init()
+    }
+
+    /// Copy the prior opt-out only once; Sparkle's setting is authoritative thereafter.
+    static func migrateAutomaticCheckPreference(defaults: UserDefaults) {
+        if defaults.object(forKey: automaticChecksKey) == nil,
+           let previous = defaults.object(forKey: legacyAutomaticChecksKey) as? Bool {
+            defaults.set(previous, forKey: automaticChecksKey)
+        }
+        defaults.removeObject(forKey: legacyAutomaticChecksKey)
+    }
+
+    static func configurationIssue(in bundle: Bundle) -> String? {
+        guard bundle.bundleURL.pathExtension == "app",
+              let version = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+              !version.isEmpty,
+              let displayVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              !displayVersion.isEmpty else {
+            return "This development build cannot install updates. Run a packaged Quartz.app release to update from inside the browser."
+        }
+        guard let feedString = bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+              let feedURL = URL(string: feedString), isValidFeedURL(feedURL),
+              let publicKey = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
+              Data(base64Encoded: publicKey)?.count == 32,
+              bundle.object(forInfoDictionaryKey: "SURequireSignedFeed") as? Bool == true,
+              bundle.object(forInfoDictionaryKey: "SUVerifyUpdateBeforeExtraction") as? Bool == true else {
+            return "This build is not configured for secure updates. Install a Quartz.app release with update signing configured."
+        }
+        return nil
+    }
+
+    static func isValidFeedURL(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(), !host.isEmpty,
+              url.user == nil, url.password == nil else { return false }
+        if url.scheme?.lowercased() == "https" { return true }
+        // Local signed-fixture testing is configured in the packaged app itself.
+        return url.scheme?.lowercased() == "http" && ["localhost", "127.0.0.1", "[::1]", "::1"].contains(host)
     }
 
     func start() {
-        guard timer == nil else { return }
-        stopped = false
-        let timer = Timer(timeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.checkAutomatically() }
-        }
-        timer.tolerance = 60
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-        checkAutomatically()
-    }
-
-    func stop() {
-        stopped = true
-        timer?.invalidate()
-        timer = nil
-        automaticTask?.cancel()
-        automaticTask = nil
-    }
-
-    func checkAutomatically() {
-        guard !stopped, automaticTask == nil else { return }
-        automaticTask = Task { [weak self] in
-            guard let self else { return }
-            await self.check()
-            self.automaticTask = nil
-        }
-    }
-
-    func check(manually: Bool = false) async {
-        guard !stopped else { return }
-        if isChecking {
-            // A manual request during a background check should receive its result.
-            manualCheckRequested = manualCheckRequested || manually
-            return
-        }
-        guard manually || automaticallyChecksForUpdates else { return }
-        guard let currentVersion, !currentVersion.isEmpty else {
-            if manually { _ = present(.unavailableVersion) }
+        guard updater == nil else { return }
+        if let issue = Self.configurationIssue(in: bundle) {
+            startupError = issue
             return
         }
 
-        let date = now()
-        if !manually, let lastCheck = defaults.object(forKey: Self.lastCheckKey) as? Date {
-            let elapsed = date.timeIntervalSince(lastCheck)
-            // A clock change must not disable checks indefinitely.
-            guard elapsed < 0 || elapsed >= Self.checkInterval else { return }
-        }
-
-        isChecking = true
-        manualCheckRequested = manually
-        checkingChanged(true)
-        defaults.set(date, forKey: Self.lastCheckKey)
-        defer {
-            isChecking = false
-            manualCheckRequested = false
-            checkingChanged(false)
-        }
-
+        let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: userDriver, delegate: self)
+        // An update is downloaded and installed only after pressing Update & Restart.
+        updater.automaticallyDownloadsUpdates = false
         do {
-            let release = try await fetchUpdate(currentVersion)
-            guard !stopped, !Task.isCancelled else { return }
-            if manualCheckRequested {
-                if let release {
-                    if present(.available(release)) { remember(release) }
-                } else {
-                    _ = present(.upToDate(currentVersion))
-                }
-                return
-            }
-            guard automaticallyChecksForUpdates, let release,
-                  defaults.string(forKey: Self.lastAnnouncedVersionKey) != release.version
-            else { return }
-
-            let delivered = await notify(release)
-            guard !stopped, !Task.isCancelled else { return }
-            if manualCheckRequested {
-                if present(.available(release)) || delivered { remember(release) }
-                return
-            }
-            guard automaticallyChecksForUpdates else { return }
-            if delivered || present(.available(release)) {
-                remember(release)
-            }
+            try updater.start()
+            self.updater = updater
+            startupError = nil
         } catch {
-            if !stopped, !Task.isCancelled, manualCheckRequested {
-                _ = present(.failed)
+            startupError = error.localizedDescription
+        }
+    }
+
+    func checkForUpdates() {
+        start()
+        guard let updater else {
+            presentMessage("Updates Unavailable", startupError ?? "Please try again later.", {})
+            return
+        }
+        if updater.canCheckForUpdates {
+            updater.checkForUpdates()
+        } else {
+            switch userDriver.state {
+            case .idle, .failed:
+                // A manual request during Sparkle's background fetch still receives a result.
+                manualCheckPending = true
+                userDriver.manualCheckRequestedDuringBackgroundCheck()
+            default:
+                userDriver.showUpdateInFocus()
             }
         }
     }
 
-    private func remember(_ release: QuartzUpdateRelease) {
-        defaults.set(release.version, forKey: Self.lastAnnouncedVersionKey)
+    func performPrimaryAction() {
+        switch userDriver.state {
+        case .available, .readyToRestart:
+            userDriver.installUpdate()
+        case .informationOnly:
+            userDriver.openUpdateInformation()
+        case .installing:
+            userDriver.retryRelaunch()
+        case .failed, .idle:
+            checkForUpdates()
+        case .checking, .downloading, .extracting:
+            break
+        }
+    }
+
+    func cancel() {
+        manualCheckPending = false
+        userDriver.cancel()
+    }
+
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        // The signed bundle owns the feed; a stale user-default URL cannot override it.
+        bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String
+    }
+
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        prepareForRelaunch()
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        guard manualCheckPending else { return }
+        manualCheckPending = false
+        guard userDriver.hasPendingManualCheck else { return }
+        // Automatic no-update/error cycles have no user-driver alert. A fresh manual
+        // cycle gives the user Sparkle's complete result, including compatibility errors.
+        // Sparkle clears its active driver and sets canCheckForUpdates before this delegate.
+        updater.checkForUpdates()
     }
 }

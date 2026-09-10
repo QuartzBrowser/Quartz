@@ -11,16 +11,29 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: quartz-release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Release
     runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Run tests before preparing a release
+        run: |
+          swift test
+          Scripts/test-update-packaging.sh
+
       - name: Run semantic-release
+        id: release
         uses: cycjimmy/semantic-release-action@v6
         with:
           extra_plugins: |
@@ -29,3 +42,11 @@ jobs:
             @semantic-release/git@10.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+
+      - name: Verify public release downloads
+        if: steps.release.outputs.new_release_published == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.new_release_version }}
+        run: Scripts/verify-published-update.sh "${RELEASE_VERSION}"

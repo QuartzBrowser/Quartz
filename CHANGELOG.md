@@ -1,3 +1,10 @@
+# [0.11.0](https://github.com/QuartzBrowser/Quartz/compare/v0.10.0...v0.11.0) (2026-09-10)
+
+
+### Features
+
+* complete browser window, download and extension workflows ([26bd561](https://github.com/QuartzBrowser/Quartz/commit/26bd561566e0dd56392c7d8064e32968cc668391))
+
 # [0.10.0](https://github.com/QuartzBrowser/Quartz/compare/v0.9.0...v0.10.0) (2026-09-10)
 
 

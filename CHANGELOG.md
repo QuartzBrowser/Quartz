@@ -1,3 +1,10 @@
+# [0.14.0](https://github.com/QuartzBrowser/Quartz/compare/v0.13.1...v0.14.0) (2026-09-12)
+
+
+### Features
+
+* personalize daily curiosity sparks with Facet ([959fb60](https://github.com/QuartzBrowser/Quartz/commit/959fb6039c115d88152a72684e324569473c0835))
+
 ## [0.13.1](https://github.com/QuartzBrowser/Quartz/compare/v0.13.0...v0.13.1) (2026-09-12)
 
 

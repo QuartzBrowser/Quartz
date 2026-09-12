@@ -17,6 +17,7 @@ BUILD_NUMBER="${BUILD_NUMBER:-${VERSION}}"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-"${ROOT_DIR}/dist"}"
 APP_DIR="${DIST_DIR}/${PRODUCT_NAME}.app"
+APP_ICON="${ROOT_DIR}/Sources/Quartz/Resources/AppIcon.icns"
 SPARKLE_FRAMEWORK="${SPARKLE_FRAMEWORK:-${ROOT_DIR}/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://github.com/QuartzBrowser/Quartz/releases/latest/download/appcast.xml}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
@@ -43,6 +44,11 @@ fi
 
 cd "${ROOT_DIR}"
 
+if [[ ! -f "${APP_ICON}" ]]; then
+    echo "error: app icon not found at ${APP_ICON}" >&2
+    exit 1
+fi
+
 BUILD_ARGS=(-c "${CONFIGURATION}" --arch arm64 --arch x86_64 --product "${PRODUCT_NAME}")
 swift build "${BUILD_ARGS[@]}"
 
@@ -59,6 +65,7 @@ mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources" "${APP_DIR}
 
 cp "${EXECUTABLE}" "${APP_DIR}/Contents/MacOS/${PRODUCT_NAME}"
 chmod 755 "${APP_DIR}/Contents/MacOS/${PRODUCT_NAME}"
+cp "${APP_ICON}" "${APP_DIR}/Contents/Resources/AppIcon.icns"
 
 if [[ ! -d "${SPARKLE_FRAMEWORK}" ]]; then
     echo "error: Sparkle framework not found at ${SPARKLE_FRAMEWORK}" >&2
@@ -79,6 +86,8 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <string>${PRODUCT_NAME}</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleName</key>
     <string>${PRODUCT_NAME}</string>
     <key>CFBundlePackageType</key>

@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      verify_version:
+        description: "Recheck an existing release without publishing (for example, 0.14.0). Leave empty for a normal release."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -17,6 +23,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
     name: Release
     runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 60
@@ -29,6 +36,7 @@ jobs:
 
       - name: Run tests before preparing a release
         run: |
+          Scripts/test-published-feed.sh
           swift test
           Scripts/test-update-packaging.sh
 
@@ -50,3 +58,38 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.new_release_version }}
         run: Scripts/verify-published-update.sh "${RELEASE_VERSION}"
+
+  verify-published-release:
+    name: Verify existing public release
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_version != ''
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Test latest-feed propagation handling
+        run: Scripts/test-published-feed.sh
+
+      - name: Verify existing public release downloads
+        env:
+          RELEASE_VERSION: ${{ inputs.verify_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: expected a numeric major.minor.patch version" >&2
+            exit 1
+          fi
+          VERIFY_DIST="$(mktemp -d)"
+          trap 'rm -rf "${VERIFY_DIST}"' EXIT
+          mkdir -p "${VERIFY_DIST}/release"
+          gh release download "v${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --dir "${VERIFY_DIST}/release" \
+            --pattern "Quartz-v${RELEASE_VERSION}-macos-universal.zip" \
+            --pattern appcast.xml --pattern SHA256SUMS
+          DIST_DIR="${VERIFY_DIST}" Scripts/verify-published-update.sh "${RELEASE_VERSION}"

@@ -33,7 +33,9 @@ jobs:
           xcrun --sdk macosx --show-sdk-version
 
       - name: Run tests
-        run: swift test
+        run: |
+          Scripts/test-published-feed.sh
+          swift test
 
       - name: Package universal macOS app
         run: Scripts/package-macos-app.sh

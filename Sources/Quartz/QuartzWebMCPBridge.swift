@@ -2,10 +2,11 @@ import Foundation
 import WebKit
 
 enum QuartzWebMCPError: LocalizedError {
-    case unavailable, pageChanged, invalidTools, timedOut
+    case disabled, unavailable, pageChanged, invalidTools, timedOut
 
     var errorDescription: String? {
         switch self {
+        case .disabled: "WebMCP is disabled. Enable it at quartz://flags/ to use page tools."
         case .unavailable: "Page tools are available on loaded HTTPS pages and localhost development pages."
         case .pageChanged: "The page or its tools changed. Send your request again to use the current page."
         case .invalidTools: "This page provided an unsupported WebMCP tool definition or result."
@@ -57,11 +58,35 @@ struct QuartzWebMCPPage: Sendable {
 @MainActor
 final class QuartzWebMCPBridge {
     private(set) var generation: UInt64 = 0
+    private let isEnabled: @MainActor () -> Bool
     private var policyAllowsTools = true
     private var pendingPolicyAllowsTools: Bool?
     private var historyPolicies: [ObjectIdentifier: (WKBackForwardListItem, Bool)] = [:]
 
+    init(isEnabled: @escaping @MainActor () -> Bool = { true }) {
+        self.isEnabled = isEnabled
+    }
+
     static func install(in controller: WKUserContentController) {
+        setEnabled(true, in: controller)
+    }
+
+    static func setEnabled(_ enabled: Bool, in controller: WKUserContentController) {
+        // WebKit's bridged array can change when removeAllUserScripts runs.
+        // Materialize a Swift-owned snapshot before mutating the controller.
+        let scripts = controller.userScripts.map { $0 }
+        let installedCount = scripts.filter { $0.source == QuartzWebMCPScript.source }.count
+        guard installedCount != (enabled ? 1 : 0) else { return }
+
+        // WebKit can only remove all user scripts. Restore every unrelated
+        // script so changing this flag preserves the browser's other features.
+        if installedCount > 0 {
+            controller.removeAllUserScripts()
+            for script in scripts where script.source != QuartzWebMCPScript.source {
+                controller.addUserScript(script)
+            }
+        }
+        guard enabled else { return }
         controller.addUserScript(WKUserScript(
             source: QuartzWebMCPScript.source,
             injectionTime: .atDocumentStart,
@@ -70,9 +95,11 @@ final class QuartzWebMCPBridge {
         ))
     }
 
-    func invalidate() {
+    func invalidate(preservingPendingPolicy: Bool = false) {
         generation &+= 1
-        pendingPolicyAllowsTools = nil
+        // Preference changes revoke existing tool snapshots without discarding
+        // an in-flight document's already received Permissions-Policy response.
+        if !preservingPendingPolicy { pendingPolicyAllowsTools = nil }
     }
 
     func commitMainDocument(history: WKBackForwardList? = nil, isHistoryNavigation: Bool = false) {
@@ -134,11 +161,12 @@ final class QuartzWebMCPBridge {
 
     func discover(in webView: WKWebView) async throws -> QuartzWebMCPPage? {
         try Task.checkCancellation()
-        guard policyAllowsTools, !webView.isLoading, Self.isEligibleURL(webView.url), let url = webView.url else {
+        guard isEnabled(), policyAllowsTools, !webView.isLoading, Self.isEligibleURL(webView.url), let url = webView.url else {
             return nil
         }
         let expectedGeneration = generation
         let data = try await evaluate(QuartzWebMCPScript.snapshotScript, in: webView)
+        guard isEnabled() else { throw QuartzWebMCPError.disabled }
         guard generation == expectedGeneration, webView.url == url, !webView.isLoading, policyAllowsTools else {
             throw QuartzWebMCPError.pageChanged
         }
@@ -170,13 +198,16 @@ final class QuartzWebMCPBridge {
     }
 
     func validate(_ page: QuartzWebMCPPage, tool: QuartzWebMCPTool, in webView: WKWebView) async throws {
+        guard isEnabled() else { throw QuartzWebMCPError.disabled }
         guard page.generation == generation, page.url == webView.url,
               let current = try await discover(in: webView), current.documentID == page.documentID,
               current.tools.contains(tool) else { throw QuartzWebMCPError.pageChanged }
+        guard isEnabled() else { throw QuartzWebMCPError.disabled }
     }
 
     func execute(_ tool: QuartzWebMCPTool, input: FacetJSONValue, page: QuartzWebMCPPage, in webView: WKWebView) async throws -> FacetJSONValue {
         try await validate(page, tool: tool, in: webView)
+        guard isEnabled() else { throw QuartzWebMCPError.disabled }
         guard case .object = input else { throw QuartzWebMCPError.invalidTools }
         let inputData = try JSONEncoder().encode(input)
         guard inputData.count <= 65_536 else { throw QuartzWebMCPError.invalidTools }
@@ -191,6 +222,7 @@ final class QuartzWebMCPBridge {
             cancel(in: webView, documentID: page.documentID)
             throw error
         }
+        guard isEnabled() else { throw QuartzWebMCPError.disabled }
         guard generation == page.generation, webView.url == page.url, !webView.isLoading else {
             throw QuartzWebMCPError.pageChanged
         }

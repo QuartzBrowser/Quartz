@@ -59,7 +59,8 @@ final class FacetPanelView: NSView {
     private let closeButton = FacetPanelView.makeIconButton(symbolName: "xmark", description: "Hide Facet")
 
     private(set) var isRunning = false
-    var usesPageTools: Bool { pageToolsCheckbox.state == .on }
+    private var pageToolsAvailable = false
+    var usesPageTools: Bool { pageToolsAvailable && pageToolsCheckbox.state == .on }
     private var isLoadingModels = false
 
     private enum PreferenceKeys {
@@ -115,7 +116,7 @@ final class FacetPanelView: NSView {
         sendButton.isHidden = running
         stopButton.isHidden = !running
         includePageCheckbox.isEnabled = !running
-        pageToolsCheckbox.isEnabled = !running
+        pageToolsCheckbox.isEnabled = !running && pageToolsAvailable
         modelPopup.isEnabled = !running
         reasoningPopup.isEnabled = !running && !supportedReasoningEfforts.isEmpty
         apiKeyField.isEnabled = !running
@@ -128,6 +129,16 @@ final class FacetPanelView: NSView {
         isLoadingModels = loading
         refreshModelsButton.isEnabled = !isRunning && !loading
         updateStatus()
+    }
+
+    func setPageToolsAvailable(_ available: Bool) {
+        pageToolsAvailable = available
+        if !available { pageToolsCheckbox.state = .off }
+        pageToolsCheckbox.isEnabled = available && !isRunning
+        pageToolsCheckbox.toolTip = available
+            ? "Send this site's WebMCP tool descriptions and approved results to OpenRouter. Quartz asks before each tool runs."
+            : "Enable WebMCP at quartz://flags/ and reload the website to use page tools."
+        pageToolsCheckbox.setAccessibilityHelp(pageToolsCheckbox.toolTip)
     }
 
     private func updateStatus() {
@@ -223,7 +234,7 @@ final class FacetPanelView: NSView {
         includePageCheckbox.toolTip = "Send this page's URL, title, selected text, and text excerpt to OpenRouter with your question."
         pageToolsCheckbox.state = .off
         pageToolsCheckbox.font = .systemFont(ofSize: 12)
-        pageToolsCheckbox.toolTip = "Send this site's WebMCP tool descriptions and approved results to OpenRouter. Quartz asks before each tool runs."
+        setPageToolsAvailable(false)
         configurePopup(modelPopup, description: "OpenRouter model")
         configurePopup(reasoningPopup, description: "OpenRouter reasoning effort")
         setModelOptions(FacetModelOption.fallbackOptions)

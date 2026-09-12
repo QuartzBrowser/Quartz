@@ -61,6 +61,7 @@ process, including rebuilding the ZIP after stapling.
 - File downloads with a native save dialog and completion feedback
 - Facet side-panel assistant powered by OpenRouter
 - Experimental WebMCP page tools with native confirmation in Facet
+- Persistent experimental feature switches at `quartz://flags/`
 - Optional Chromium-format WebExtension installation on macOS 15.4+, including Chrome Web Store downloads
 - Address/search field
 - Back, forward, reload, stop, home, reading, and Facet controls
@@ -118,8 +119,12 @@ Choose an OpenRouter model and an optional reasoning level, then ask a question.
 
 Facet sends your prompt and recent conversation to OpenRouter and the selected model provider. When **Current page** is enabled, the request also includes the active page URL, title, selected text, description, and a bounded visible-text excerpt. Turn **Current page** off to omit that page context from future requests.
 
-Enable **Page tools** to let Facet use WebMCP tools declared by the active website.
-It is off by default, and Quartz asks for native confirmation before every tool
+Enable **WebMCP** at `quartz://flags/` (also available through **View > Experimental
+Features…**), then reload the website and enable **Page tools** in Facet to use
+tools declared by that website. Both controls are off by default. The flag is
+saved across launches; changing it applies to new page loads in all windows.
+Disabling it immediately stops Facet page tools, including pending approvals.
+Reload open websites to update the page API. Quartz asks for native confirmation before every tool
 execution. Tool descriptions, schemas, and results are shared with your selected
 model provider. See the [WebMCP guide and local example](docs/webmcp.md) for setup
 and the experimental compatibility limits.

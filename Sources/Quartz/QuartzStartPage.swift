@@ -395,7 +395,7 @@ enum QuartzStartPage {
         </div>
       </section>
     </main>
-    <footer><span class="local">Made for wandering. Right at home.</span><time id="today"></time><a href="https://github.com/QuartzBrowser/Quartz">Made of Quartz <span aria-hidden="true">↗</span></a></footer>
+    <footer><span class="local">Made for wandering. Right at home.</span><time id="today"></time><a href="quartz://flags/">Flags</a><a href="https://github.com/QuartzBrowser/Quartz">Made of Quartz <span aria-hidden="true">↗</span></a></footer>
   </div>
   <script>\#(script)</script>
 </body>
@@ -414,6 +414,10 @@ enum QuartzURLRouting {
             return QuartzStartPage.url
         }
 
+        if let url = URL(string: trimmed), QuartzFlagsPage.isFlagsPageURL(url) {
+            return QuartzFlagsPage.url
+        }
+
         if let url = URL(string: trimmed),
            let scheme = url.scheme?.lowercased(),
            isStandardBrowsingScheme(scheme) {
@@ -430,6 +434,7 @@ enum QuartzURLRouting {
     }
 
     static func isRestorableSessionURL(_ url: URL) -> Bool {
+        if QuartzFlagsPage.isFlagsPageURL(url) { return true }
         guard let scheme = url.scheme?.lowercased() else {
             return false
         }
@@ -438,6 +443,7 @@ enum QuartzURLRouting {
     }
 
     static func isStandardBrowsingURL(_ url: URL) -> Bool {
+        if QuartzFlagsPage.isFlagsPageURL(url) { return true }
         guard let scheme = url.scheme?.lowercased() else {
             return false
         }
@@ -457,14 +463,30 @@ enum QuartzURLRouting {
     }
 }
 
+@MainActor
 final class QuartzStartPageSchemeHandler: NSObject, WKURLSchemeHandler {
+    private let featureFlags: QuartzFeatureFlags
+
+    init(featureFlags: QuartzFeatureFlags = QuartzFeatureFlags()) {
+        self.featureFlags = featureFlags
+        super.init()
+    }
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        guard QuartzStartPage.isStartPageURL(urlSchemeTask.request.url) else {
+        let html: String
+        let contentSecurityPolicy: String
+        if QuartzStartPage.isStartPageURL(urlSchemeTask.request.url) {
+            html = QuartzStartPage.html
+            contentSecurityPolicy = QuartzStartPage.contentSecurityPolicy
+        } else if QuartzFlagsPage.isFlagsPageURL(urlSchemeTask.request.url) {
+            html = QuartzFlagsPage.html(webMCPEnabled: featureFlags.isWebMCPEnabled)
+            contentSecurityPolicy = QuartzFlagsPage.contentSecurityPolicy
+        } else {
             urlSchemeTask.didFailWithError(resourceError(for: urlSchemeTask.request.url))
             return
         }
 
-        let data = Data(QuartzStartPage.html.utf8)
+        let data = Data(html.utf8)
         let requestURL = urlSchemeTask.request.url ?? QuartzStartPage.url
         let response = HTTPURLResponse(
             url: requestURL,
@@ -474,7 +496,7 @@ final class QuartzStartPageSchemeHandler: NSObject, WKURLSchemeHandler {
                 "Content-Type": "text/html; charset=utf-8",
                 "Content-Length": String(data.count),
                 "Cache-Control": "no-store",
-                "Content-Security-Policy": QuartzStartPage.contentSecurityPolicy
+                "Content-Security-Policy": contentSecurityPolicy
             ]
         ) ?? URLResponse(
             url: requestURL,

@@ -37,6 +37,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let restoresSavedSession: Bool
     private let focusesWindowOnOpen: Bool
     private let sessionDefaults: UserDefaults
+    private let featureFlags: QuartzFeatureFlags
+    private var appliedWebMCPEnabled = false
     private let facetPersonalization: FacetPersonalizationController
     private var facetPersonalizationObserver: UUID?
     private var initialNavigation: ((BrowserController) -> Void)?
@@ -52,7 +54,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let facetClient: FacetOpenRouterClient
     private var activeFacetTask: Task<Void, Never>?
     private var activeFacetRequestID: UUID?
-    private let webMCP = QuartzWebMCPBridge()
+    private let webMCP: QuartzWebMCPBridge
     private var activeFacetUsesPageTools = false
     private var activeWebMCPPage: QuartzWebMCPPage?
     private var activePageToolAlert: NSAlert?
@@ -137,6 +139,9 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         self.restoresSavedSession = restoresSavedSession
         self.focusesWindowOnOpen = focusesWindow
         self.sessionDefaults = sessionDefaults
+        let featureFlags = QuartzFeatureFlags(defaults: sessionDefaults)
+        self.featureFlags = featureFlags
+        self.webMCP = QuartzWebMCPBridge(isEnabled: { featureFlags.isWebMCPEnabled })
         self.facetPersonalization = facetPersonalization ?? FacetPersonalizationController(defaults: sessionDefaults)
         self.facetClient = facetClient
         super.init()
@@ -159,6 +164,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             buildMenu()
         }
         buildWindow()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(featureFlagsDidChange(_:)),
+            name: QuartzFeatureFlags.didChangeNotification, object: nil
+        )
         facetPersonalizationObserver = facetPersonalization.observe { [weak self] in
             self?.updateCuriositySparks()
         }
@@ -183,6 +192,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     func windowWillClose(_ notification: Notification) {
         saveCurrentSession()
         hasClosedWindow = true
+        NotificationCenter.default.removeObserver(self, name: QuartzFeatureFlags.didChangeNotification, object: nil)
         initialNavigation = nil
         pendingNavigationURL = nil
         cancelPageToolExecution()
@@ -226,12 +236,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         configuration.websiteDataStore = WKWebsiteDataStore.default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.setURLSchemeHandler(
-            QuartzStartPageSchemeHandler(),
+            QuartzStartPageSchemeHandler(featureFlags: featureFlags),
             forURLScheme: QuartzStartPage.scheme
         )
         let userContentController = WKUserContentController()
         configuration.userContentController = userContentController
-        QuartzWebMCPBridge.install(in: userContentController)
+        appliedWebMCPEnabled = featureFlags.isWebMCPEnabled
+        QuartzWebMCPBridge.setEnabled(appliedWebMCPEnabled, in: userContentController)
         adBlocker.connect(to: userContentController)
 
         if #available(macOS 15.4, *) {
@@ -316,6 +327,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         webContentView.translatesAutoresizingMaskIntoConstraints = false
         facetPanelView = FacetPanelView()
         facetPanelView.delegate = self
+        facetPanelView.setPageToolsAvailable(appliedWebMCPEnabled)
         facetPanelView.isHidden = true
         facetPanelView.translatesAutoresizingMaskIntoConstraints = false
         facetPanelWidthConstraint = facetPanelView.widthAnchor.constraint(equalToConstant: 0)
@@ -448,6 +460,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         facetItem.target = self
         viewMenu.addItem(facetItem)
         facetMenuItem = facetItem
+
+        let flagsItem = NSMenuItem(title: "Experimental Features…", action: #selector(showFlags(_:)), keyEquivalent: "")
+        flagsItem.target = self
+        viewMenu.addItem(flagsItem)
 
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
@@ -588,6 +604,28 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     @objc private func checkForUpdates(_ sender: Any?) {
         updateController.checkForUpdates()
+    }
+
+    @objc private func showFlags(_ sender: Any?) {
+        load(QuartzFlagsPage.url)
+    }
+
+    @objc private func featureFlagsDidChange(_ notification: Notification) {
+        guard !hasClosedWindow else { return }
+        let enabled = featureFlags.isWebMCPEnabled
+        // Other profiles can post the same notification; apply only our own changes.
+        guard enabled != appliedWebMCPEnabled else { return }
+        appliedWebMCPEnabled = enabled
+        if !enabled, activeFacetUsesPageTools {
+            facetPanelDidRequestCancel(facetPanelView)
+            facetPanelView.appendSystemMessage("WebMCP was disabled in quartz://flags/. Page tools have stopped.")
+        }
+        webMCP.invalidate(preservingPendingPolicy: true)
+        QuartzWebMCPBridge.setEnabled(enabled, in: standardWebView.configuration.userContentController)
+        facetPanelView.setPageToolsAvailable(enabled)
+        if QuartzFlagsPage.isFlagsPageURL(standardWebView.url) {
+            standardWebView.reload()
+        }
     }
 
     @objc private func performUpdateAction(_ sender: Any?) {
@@ -1441,7 +1479,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard activeFacetRequestID == nil else { return }
         let requestID = UUID()
         activeFacetRequestID = requestID
-        activeFacetUsesPageTools = panel.usesPageTools
+        activeFacetUsesPageTools = featureFlags.isWebMCPEnabled && panel.usesPageTools
         panel.appendUserMessage(prompt)
         panel.setRunning(true)
 
@@ -1598,7 +1636,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func confirmPageTool(_ tool: QuartzWebMCPTool, input: FacetJSONValue, page: QuartzWebMCPPage) async -> Bool {
-        guard !Task.isCancelled, !hasClosedWindow else { return false }
+        guard !Task.isCancelled, !hasClosedWindow, featureFlags.isWebMCPEnabled else { return false }
         let alert = NSAlert()
         alert.messageText = "Allow this page tool?"
         let site = "\(page.url.scheme ?? "https")://\(page.url.host ?? "")\(page.url.port.map { ":\($0)" } ?? "")"
@@ -1740,12 +1778,28 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             decisionHandler(.cancel)
 
             guard webView === self.webView,
-                  webView === standardWebView,
-                  let action = QuartzStartPage.authorizedAction(
-                      for: url,
-                      sourcePageURL: navigationAction.sourceFrame.request.url,
-                      sourceIsMainFrame: navigationAction.sourceFrame.isMainFrame
-                  )
+                  webView === standardWebView else { return }
+
+            if !webView.isLoading,
+               QuartzFlagsPage.isFlagsPageURL(webView.url),
+               navigationAction.targetFrame?.isMainFrame == true,
+               let action = QuartzFlagsPage.authorizedAction(
+                   for: url,
+                   sourcePageURL: navigationAction.sourceFrame.request.url,
+                   sourceIsMainFrame: navigationAction.sourceFrame.isMainFrame
+               ) {
+                switch action {
+                case .setWebMCPEnabled(let enabled):
+                    featureFlags.setWebMCPEnabled(enabled)
+                }
+                return
+            }
+
+            guard let action = QuartzStartPage.authorizedAction(
+                for: url,
+                sourcePageURL: navigationAction.sourceFrame.request.url,
+                sourceIsMainFrame: navigationAction.sourceFrame.isMainFrame
+            )
             else {
                 return
             }
@@ -1830,6 +1884,18 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         )
     }
 
+    private func updateFlagsPage() {
+        guard !hasClosedWindow, let webView,
+              webView === standardWebView,
+              !webView.isLoading,
+              QuartzFlagsPage.isFlagsPageURL(webView.url) else { return }
+        webView.callAsyncJavaScript(
+            QuartzFlagsPage.updateSettingScript,
+            arguments: ["enabled": featureFlags.isWebMCPEnabled],
+            in: nil, in: .page, completionHandler: nil
+        )
+    }
+
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if webView === self.webView {
             pendingNavigationURL = nil
@@ -1859,10 +1925,15 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             sessionURL = isShowingStartPage ? QuartzStartPage.url : displayURL
             updateAddressField(for: displayURL)
         }
-        window.title = isShowingStartPage
-            ? "Home - Quartz"
-            : (webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz")
+        if isShowingStartPage {
+            window.title = "Home - Quartz"
+        } else if QuartzFlagsPage.isFlagsPageURL(webView.url) {
+            window.title = "Flags - Quartz"
+        } else {
+            window.title = webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz"
+        }
         updateControls()
+        updateFlagsPage()
         if isShowingStartPage {
             updateCuriositySparks()
             facetPersonalization.refresh()

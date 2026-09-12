@@ -114,10 +114,32 @@ final class QuartzWebMCPBrowserTests: XCTestCase {
         XCTAssertTrue(harness.personalization.history.messages.isEmpty)
     }
 
+    func testDisablingWebMCPDismissesPendingApprovalWithoutExecuting() async throws {
+        let harness = try await makeBrowser()
+        defer { harness.finish() }
+        let checkbox = try pageToolsCheckbox(in: harness.panel)
+        XCTAssertTrue(checkbox.isEnabled)
+        checkbox.state = .on
+        submit(in: harness)
+        let window = try XCTUnwrap(harness.browser.extensionWindow)
+        try await waitUntil { window.attachedSheet != nil }
+        try await assertExecutionCount(0, in: harness.webView)
+
+        QuartzFeatureFlags(defaults: harness.defaults).setWebMCPEnabled(false)
+
+        try await waitUntil { window.attachedSheet == nil && !harness.panel.isRunning }
+        XCTAssertFalse(checkbox.isEnabled)
+        XCTAssertEqual(checkbox.state, .off)
+        try await assertExecutionCount(0, in: harness.webView)
+        XCTAssertEqual(harness.transport.requests.count, 1)
+        XCTAssertTrue(harness.personalization.history.messages.isEmpty)
+    }
+
     private func makeBrowser() async throws -> Harness {
         _ = NSApplication.shared
         let suite = "QuartzWebMCPBrowserTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        QuartzFeatureFlags(defaults: defaults).setWebMCPEnabled(true)
         let transport = BrowserToolTransport()
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [BrowserToolURLProtocol.self]

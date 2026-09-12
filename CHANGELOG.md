@@ -1,3 +1,10 @@
+# [0.15.0](https://github.com/QuartzBrowser/Quartz/compare/v0.14.1...v0.15.0) (2026-09-12)
+
+
+### Features
+
+* **webmcp:** add page tools to Facet ([eb691c7](https://github.com/QuartzBrowser/Quartz/commit/eb691c7398c5714c3f58f969affe4275793eaf99))
+
 ## [0.14.1](https://github.com/QuartzBrowser/Quartz/compare/v0.14.0...v0.14.1) (2026-09-12)
 
 

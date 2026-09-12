@@ -1,3 +1,10 @@
+# [0.12.0](https://github.com/QuartzBrowser/Quartz/compare/v0.11.0...v0.12.0) (2026-09-12)
+
+
+### Features
+
+* add Quartz app icon ([08a96e2](https://github.com/QuartzBrowser/Quartz/commit/08a96e21abb2a2b1bf4a83409f53ef8f4b48d4b8))
+
 # [0.11.0](https://github.com/QuartzBrowser/Quartz/compare/v0.10.0...v0.11.0) (2026-09-10)
 
 

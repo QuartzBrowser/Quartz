@@ -191,6 +191,24 @@ Conventional Commits merged into `main` drive `.github/workflows/release.yml` an
 universal ad-hoc app, signs the frozen ZIP and appcast with the existing Sparkle
 key, publishes them with `SHA256SUMS`, and verifies fresh public downloads.
 
+The version-specific downloads must match the prepared release assets exactly.
+The public `releases/latest/download/appcast.xml` route can briefly serve the
+previous feed after publication, so verification retries that exact URL up to
+12 times, waiting 10 seconds between attempts. It succeeds only when the feed
+matches the version-specific appcast byte for byte. Persistent mismatches and
+download failures still fail the job. `Scripts/test-published-feed.sh` checks
+propagation, download failures, and retry exhaustion without network access.
+
+If publication succeeds but public verification fails, use **Actions > release >
+Run workflow** and set `verify_version` to the published version (for example,
+`0.14.0`). This runs a read-only verification job: it obtains reference assets
+through the GitHub API, downloads them again through the public URLs, and checks
+checksums, the latest-feed route, application signatures, version, and update
+archive signature. It does not rebuild, replace, or publish release assets.
+The requested version must still be the latest release. Leave `verify_version`
+empty for a normal release run. Simply rerunning the original release job can
+skip public verification when semantic-release finds no new version to publish.
+
 - [ ] Run `Scripts/test-update-packaging.sh` for changes to that pipeline; it uses
   disposable update keys. See [update setup](UPDATES.md) for production key setup.
 - [ ] Check the release job and the public-download audit, not just the tag.

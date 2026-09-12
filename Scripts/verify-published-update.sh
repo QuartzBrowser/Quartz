@@ -21,11 +21,7 @@ done
     cd "${VERIFY_DIR}"
     shasum -a 256 --check SHA256SUMS
 )
-curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
-    --connect-timeout 20 --max-time 180 \
-    "https://github.com/QuartzBrowser/Quartz/releases/latest/download/appcast.xml" \
-    --output "${VERIFY_DIR}/latest.xml"
-cmp "${VERIFY_DIR}/appcast.xml" "${VERIFY_DIR}/latest.xml"
+"${ROOT_DIR}/Scripts/wait-for-published-feed.sh" "${VERIFY_DIR}/appcast.xml" "${VERIFY_DIR}/latest.xml"
 ditto -x -k "${VERIFY_DIR}/${ARCHIVE_NAME}" "${VERIFY_DIR}/unpacked"
 codesign --verify --deep --strict "${VERIFY_DIR}/unpacked/Quartz.app"
 swift "${ROOT_DIR}/Scripts/verify-update.swift" "${VERIFY_DIR}/unpacked/Quartz.app" \

@@ -82,6 +82,26 @@ final class QuartzStartPageTests: XCTestCase {
         XCTAssertEqual(QuartzStartPage.action(for: url), .navigate("fox + owl"))
     }
 
+    func testGeneratedSparkActionsAlwaysRemainSearches() {
+        for query in ["fox+owl & 雪 #1 / 50%", "https://example.org", "file:///tmp/private", "javascript:alert(1)", "quartz-action://facet"] {
+            var components = URLComponents(string: "quartz-action://spark-search")!
+            components.queryItems = [URLQueryItem(name: "query", value: query)]
+            // The page uses encodeURIComponent, which percent-encodes a literal +.
+            components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+            let url = components.url!
+            XCTAssertEqual(QuartzStartPage.action(for: url), .searchSpark(query))
+            XCTAssertEqual(QuartzStartPage.authorizedAction(
+                for: url, sourcePageURL: QuartzStartPage.url, sourceIsMainFrame: true
+            ), .searchSpark(query))
+            XCTAssertNil(QuartzStartPage.authorizedAction(
+                for: url, sourcePageURL: URL(string: "https://example.org"), sourceIsMainFrame: true
+            ))
+            XCTAssertNil(QuartzStartPage.authorizedAction(
+                for: url, sourcePageURL: QuartzStartPage.url, sourceIsMainFrame: false
+            ))
+        }
+    }
+
     func testNativeActionsAreAuthorizedOnlyFromTheMainStartPageFrame() {
         let facetURL = URL(string: "quartz-action://facet")!
 

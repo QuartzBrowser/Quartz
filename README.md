@@ -71,9 +71,13 @@ process, including rebuilding the ZIP after stapling.
 
 [View the home page in dark mode](docs/screenshots/home-dark.png).
 
-Visit `quartz://home` for a colorful launchpad with web search, quick links, and things to discover. The page is built into Quartz and works offline; opening a website or searching connects to the web. Its search box uses the same URL and DuckDuckGo search routing as the native address field, with direct access to the Facet panel and Extensions menu.
+Visit `quartz://home` for a colorful launchpad with web search, quick links, and things to discover. The page is built into Quartz and works offline; opening a website, searching, or generating personalized sparks connects to the web. Its search box uses the same URL and DuckDuckGo search routing as the native address field, with direct access to the Facet panel and Extensions menu.
 
 Choose a Daydream, Orbit, or Golden color mood, spin the quartz crystal, or shuffle a daily curiosity spark for something new to explore. Home follows the system’s light/dark appearance and Reduce Motion preference.
+
+After you chat with Facet, it creates a fresh set of personalized Curiosity Sparks each local calendar day using your recent completed chats and your selected OpenRouter model and reasoning settings. It favors interests you express, offers different angles to explore, and asks the model to avoid repeating the previous set. **Shuffle** moves through the day's set without another model request. Exploring a personalized spark runs a DuckDuckGo search.
+
+Daily generation runs while Quartz is open, including when Home is not visible, and catches up after launch or wake. The set is shared across windows and saved for the next launch. Generation requires an OpenRouter API key and may use provider credits. Automatic retries are spaced at least 15 minutes apart; changing Facet settings allows an immediate retry. If generation is unavailable, Home keeps the last successful set or uses built-in discoveries when no personalized set exists.
 
 The Home button and new windows open `quartz://home`, and the older `quartz://start` address still works. The address bar stays blank on Home, ready for a search or website address. Quartz also opens Home when there is no saved browsing session; a valid saved web or file URL takes precedence at launch.
 
@@ -112,6 +116,8 @@ Facet is a docked AI assistant panel inside Quartz, powered by OpenRouter. Open 
 Choose an OpenRouter model and an optional reasoning level, then ask a question. The default model uses OpenRouter's automatic routing; the default reasoning option lets the model use its own settings. Available models and supported reasoning options depend on OpenRouter and the selected provider.
 
 Facet sends your prompt and recent conversation to OpenRouter and the selected model provider. When **Current page** is enabled, the request also includes the active page URL, title, selected text, description, and a bounded visible-text excerpt. Turn **Current page** off to omit that page context from future requests.
+
+For Curiosity Spark personalization, Quartz saves up to 100 completed prompt/reply pairs on this Mac, capped at 4,000 characters per message. It sends a bounded selection of recent chat text to OpenRouter for daily generation, giving user messages more weight than assistant replies. Raw page-context attachments, errors, and canceled requests are not saved in this history; a reply may still discuss the page you asked about. Chats from before this feature was installed cannot be recovered. **Clear saved chats** in Facet clears saved history, current conversations in all windows, and personalized sparks, and cancels pending generation. New completed chats begin personalization again.
 
 ## Extensions
 

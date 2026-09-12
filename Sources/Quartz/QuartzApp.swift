@@ -37,6 +37,8 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let restoresSavedSession: Bool
     private let focusesWindowOnOpen: Bool
     private let sessionDefaults: UserDefaults
+    private let facetPersonalization: FacetPersonalizationController
+    private var facetPersonalizationObserver: UUID?
     private var initialNavigation: ((BrowserController) -> Void)?
     private var window: NSWindow!
     private var webContentView: NSView!
@@ -125,11 +127,12 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private static let savedSessionURLKey = "Quartz.savedSession.url"
     private static let sandboxedExtensionPageScheme = "quartz-extension-sandbox"
 
-    init(sharedExtensionSupport: AnyObject? = nil, restoresSavedSession: Bool = true, focusesWindow: Bool = true, sessionDefaults: UserDefaults = .standard) {
+    init(sharedExtensionSupport: AnyObject? = nil, restoresSavedSession: Bool = true, focusesWindow: Bool = true, sessionDefaults: UserDefaults = .standard, facetPersonalization: FacetPersonalizationController? = nil) {
         self.webExtensionSupport = sharedExtensionSupport
         self.restoresSavedSession = restoresSavedSession
         self.focusesWindowOnOpen = focusesWindow
         self.sessionDefaults = sessionDefaults
+        self.facetPersonalization = facetPersonalization ?? FacetPersonalizationController(defaults: sessionDefaults)
         super.init()
     }
     private lazy var downloadCoordinator = QuartzDownloadCoordinator(window: { [weak self] in self?.window })
@@ -150,6 +153,9 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             buildMenu()
         }
         buildWindow()
+        facetPersonalizationObserver = facetPersonalization.observe { [weak self] in
+            self?.updateCuriositySparks()
+        }
         loadSavedExtensionsThenRestoreSession()
     }
 
@@ -161,6 +167,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         for browser in Self.openBrowsers {
             browser.activeFacetTask?.cancel()
             browser.facetModelOptionsTask?.cancel()
+            browser.facetPersonalization.stop()
             browser.downloadCoordinator.cancelAll(discardStagingImmediately: true)
         }
         Self.lastFocusedBrowser?.saveCurrentSession()
@@ -173,6 +180,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         pendingNavigationURL = nil
         activeFacetTask?.cancel()
         facetModelOptionsTask?.cancel()
+        if let facetPersonalizationObserver {
+            facetPersonalization.removeObserver(facetPersonalizationObserver)
+            self.facetPersonalizationObserver = nil
+        }
         downloadCoordinator.cancelAll()
         webView.stopLoading()
         Self.openBrowsers.removeAll { $0 === self }
@@ -191,7 +202,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     @discardableResult
     func openBrowserWindow(focused: Bool = true, initialURL: URL? = nil, navigate: ((BrowserController) -> Void)? = nil) -> BrowserController {
-        let browser = BrowserController(sharedExtensionSupport: webExtensionSupport, restoresSavedSession: false, focusesWindow: focused, sessionDefaults: sessionDefaults)
+        let browser = BrowserController(sharedExtensionSupport: webExtensionSupport, restoresSavedSession: false, focusesWindow: focused, sessionDefaults: sessionDefaults, facetPersonalization: facetPersonalization)
         browser.initialNavigation = navigate
         browser.pendingNavigationURL = initialURL ?? QuartzStartPage.url
         browser.start()
@@ -1466,6 +1477,23 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         loadFacetModelOptions()
     }
 
+    func facetPanelSettingsDidChange(_ panel: FacetPanelView) {
+        facetPersonalization.settingsChanged()
+    }
+
+    func facetPanelDidRequestClearHistory(_ panel: FacetPanelView) {
+        // Cancel current exchanges too, so a late response cannot restore cleared history.
+        for browser in Self.openBrowsers where browser.facetPersonalization === facetPersonalization {
+            browser.activeFacetRequestID = nil
+            browser.activeFacetTask?.cancel()
+            browser.activeFacetTask = nil
+            browser.facetMessages.removeAll()
+            browser.facetPanelView.setRunning(false)
+            browser.facetPanelView.clearTranscript()
+        }
+        facetPersonalization.clearHistory()
+    }
+
     private func startFacetRun(
         requestID: UUID,
         userPrompt: String,
@@ -1493,6 +1521,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
                 self.facetMessages.append(FacetChatMessage(role: "user", content: userPrompt))
                 self.facetMessages.append(FacetChatMessage(role: "assistant", content: output))
                 self.facetMessages = Array(self.facetMessages.suffix(8))
+                self.facetPersonalization.appendExchange(userPrompt: userPrompt, assistantReply: output)
                 self.facetPanelView.appendAgentMessage(output)
             } catch {
                 guard !Task.isCancelled, self.activeFacetRequestID == requestID else { return }
@@ -1642,11 +1671,39 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
                 return
             }
             load(url)
+        case .searchSpark(let query):
+            guard let url = Self.curiositySparkSearchURL(query) else { return }
+            load(url)
         case .showFacet:
             setFacetPanelVisible(true)
         case .showExtensions:
             showExtensionsMenu(extensionsButton)
         }
+    }
+
+    static func curiositySparkSearchURL(_ query: String) -> URL? {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, query.count <= 240 else { return nil }
+        var components = URLComponents(string: "https://duckduckgo.com/")!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        return components.url
+    }
+
+    private func updateCuriositySparks() {
+        guard !hasClosedWindow, let webView,
+              webView === standardWebView,
+              !webView.isLoading,
+              QuartzStartPage.isStartPageURL(webView.url) else { return }
+        let sparks = facetPersonalization.sparks.sparks.map {
+            ["title": $0.title, "query": $0.query, "category": $0.category]
+        }
+        webView.callAsyncJavaScript(
+            QuartzStartPage.updateCuriositySparksScript,
+            arguments: ["sparks": sparks, "status": facetPersonalization.status],
+            in: nil,
+            in: .page,
+            completionHandler: nil
+        )
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -1678,6 +1735,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             ? "Home - Quartz"
             : (webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz")
         updateControls()
+        if isShowingStartPage {
+            updateCuriositySparks()
+            facetPersonalization.refresh()
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

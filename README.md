@@ -121,6 +121,10 @@ For Curiosity Spark personalization, Quartz saves up to 100 completed prompt/rep
 
 ## Extensions
 
+**Ad blockers are welcome. I will not ban or deliberately obstruct them, even if
+you turn off Quartz's built-in blocker and use an extension instead.** Read the
+[Extensions Policy](EXTENSIONS_POLICY.md) for the full commitment.
+
 Quartz installs Chromium-format WebExtensions from the Chrome Web Store, an unpacked extension folder, a `.zip` archive, or a `.crx` package.
 
 Users can opt into extensions from a Chrome Web Store listing with the native **Install** button that appears in the Quartz toolbar, or with **Extensions > Install This Web Store Extension**. Users can also choose **Extensions > Install from Chrome Web Store...** and paste a store listing URL or extension ID. Local packages are still available through **Extensions > Install Extension from File...**. Quartz copies installed extensions into Application Support and restores them on launch.
@@ -129,7 +133,11 @@ Quartz asks before granting an extension browser permissions or website access.
 Use **Extensions > Manage Extensions…** to enable, disable, or uninstall installed
 extensions. Uninstalling preserves your original source file or folder.
 
-Quartz includes a tiny built-in blocker for a few obvious third-party ad resources. The former larger bundled ad-blocking filters now live in a separate Quartz Ad Blocker extension package.
+Quartz includes a tiny built-in blocker for a few obvious third-party ad resources.
+Right now it is limited and misses plenty; I will keep improving it, but you are
+free to use a compatible third-party blocker instead. Use **View > Disable Basic
+Ad Blocker** to turn it off in the current window. The former larger bundled
+ad-blocking filters now live in a separate Quartz Ad Blocker extension package.
 
 Extension authors can follow the [packaging guide](docs/extensions.md) and install
 the [Hello Quartz sample](examples/extensions/hello-quartz). It includes an offline

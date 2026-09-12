@@ -1185,7 +1185,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         switchActiveWebView(to: sandboxedWebView)
 
         sessionURL = displayURL
-        addressField.stringValue = displayURL.absoluteString
+        updateAddressField(for: displayURL)
         webView.load(URLRequest(url: sandboxURL))
         updateControls()
     }
@@ -1210,7 +1210,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
 
         sessionURL = url
-        addressField.stringValue = url.absoluteString
+        updateAddressField(for: url)
 
         if url.isFileURL {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
@@ -1292,6 +1292,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     private func normalizedURL(from text: String) -> URL? {
         QuartzURLRouting.normalizedURL(from: text)
+    }
+
+    private func updateAddressField(for url: URL) {
+        addressField.stringValue = QuartzStartPage.isStartPageURL(url) ? "" : url.absoluteString
     }
 
     private func updateControls() {
@@ -1651,7 +1655,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             && QuartzStartPage.isStartPageURL(webView.url)
         if isShowingStartPage {
             sessionURL = QuartzStartPage.url
-            addressField.stringValue = QuartzStartPage.url.absoluteString
+            updateAddressField(for: QuartzStartPage.url)
         }
 
         if isReaderModeActive {
@@ -1668,7 +1672,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             let displayURL = displayURLOverride ?? url
             isShowingStartPage = QuartzStartPage.isStartPageURL(displayURL)
             sessionURL = isShowingStartPage ? QuartzStartPage.url : displayURL
-            addressField.stringValue = isShowingStartPage ? QuartzStartPage.url.absoluteString : displayURL.absoluteString
+            updateAddressField(for: displayURL)
         }
         window.title = isShowingStartPage
             ? "Home - Quartz"

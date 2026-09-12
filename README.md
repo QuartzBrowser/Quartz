@@ -75,7 +75,7 @@ Visit `quartz://home` for a colorful launchpad with web search, quick links, and
 
 Choose a Daydream, Orbit, or Golden color mood, spin the quartz crystal, or shuffle a daily curiosity spark for something new to explore. Home follows the system’s light/dark appearance and Reduce Motion preference.
 
-The Home button and new windows open `quartz://home`, and the older `quartz://start` address still works. Quartz also opens Home when there is no saved browsing session; a valid saved web or file URL takes precedence at launch.
+The Home button and new windows open `quartz://home`, and the older `quartz://start` address still works. The address bar stays blank on Home, ready for a search or website address. Quartz also opens Home when there is no saved browsing session; a valid saved web or file URL takes precedence at launch.
 
 Use **File > New Window** or **Command-N** to open another browser window.
 Extensions that request a new tab or window also receive a separate window,

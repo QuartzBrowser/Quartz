@@ -18,25 +18,45 @@ final class QuartzBrowserWindowTests: XCTestCase {
         let address = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSTextField }.first {
             $0.placeholderString == "Search or enter website name"
         })
-        XCTAssertEqual(address.stringValue, "quartz://home")
+        XCTAssertEqual(address.stringValue, "")
         XCTAssertEqual(browser.extensionWindow?.title, "Home - Quartz")
+        let homeText = try await script("return document.body.innerText;", in: XCTUnwrap(browser.extensionWebView)) as? String
+        XCTAssertFalse(try XCTUnwrap(homeText).contains("quartz://home"))
 
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(suite).html")
         try "<!doctype html><title>Saved page</title><p>A page to return from.</p>".write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         browser.loadFromExtension(file)
         try await waitUntil { browser.extensionURL == file && browser.extensionWebView?.isLoading == false }
+        XCTAssertEqual(address.stringValue, file.absoluteString)
+
+        let webView = try XCTUnwrap(browser.extensionWebView)
+        XCTAssertNotNil(webView.goBack())
+        try await waitUntil { browser.extensionURL == QuartzStartPage.url && !webView.isLoading }
+        XCTAssertEqual(address.stringValue, "")
+        XCTAssertNotNil(webView.reload())
+        try await waitUntil { !webView.isLoading }
+        XCTAssertEqual(address.stringValue, "")
+        XCTAssertNotNil(webView.goForward())
+        try await waitUntil { browser.extensionURL == file && !webView.isLoading }
+        XCTAssertEqual(address.stringValue, file.absoluteString)
 
         let newWindow = browser.openBrowserWindow(focused: false)
         defer { newWindow.extensionWindow?.close() }
         try await waitUntil { newWindow.extensionURL == QuartzStartPage.url && newWindow.extensionWebView?.isLoading == false }
         XCTAssertEqual(browser.extensionURL, file)
+        let newContent = try XCTUnwrap(newWindow.extensionWindow?.contentView)
+        let newAddress = try XCTUnwrap(descendants(of: newContent).compactMap { $0 as? NSTextField }.first {
+            $0.placeholderString == "Search or enter website name"
+        })
+        XCTAssertEqual(newAddress.stringValue, "")
 
         for homeAddress in ["quartz://home", "quartz://start"] {
             address.stringValue = homeAddress
             XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(address.action), to: address.target, from: address))
+            XCTAssertEqual(address.stringValue, "")
             try await waitUntil { browser.extensionURL == QuartzStartPage.url && browser.extensionWebView?.isLoading == false }
-            XCTAssertEqual(address.stringValue, "quartz://home")
+            XCTAssertEqual(address.stringValue, "")
             browser.loadFromExtension(file)
             try await waitUntil { browser.extensionURL == file && browser.extensionWebView?.isLoading == false }
         }
@@ -44,7 +64,7 @@ final class QuartzBrowserWindowTests: XCTestCase {
         let home = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSButton }.first { $0.toolTip == "Home" })
         home.performClick(nil)
         try await waitUntil { browser.extensionURL == QuartzStartPage.url && browser.extensionWebView?.isLoading == false }
-        XCTAssertEqual(address.stringValue, "quartz://home")
+        XCTAssertEqual(address.stringValue, "")
     }
 
     func testSavedSessionStillTakesPrecedenceOverHome() async throws {

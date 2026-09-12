@@ -1196,20 +1196,21 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         load(url)
     }
 
-    private func load(_ url: URL) {
+    private func load(_ requestedURL: URL) {
         guard !hasClosedWindow else { return }
+        let isStartPageRequest = QuartzStartPage.isStartPageURL(requestedURL)
+        let url = isStartPageRequest ? QuartzStartPage.url : requestedURL
         initialNavigation = nil
         didRestoreSession = true
         pendingNavigationURL = url
         displayURLOverride = nil
-        let isStartPageRequest = QuartzStartPage.isStartPageURL(url)
 
         if (Self.isStandardBrowsingURL(url) || isStartPageRequest), webView !== standardWebView {
             switchActiveWebView(to: standardWebView)
         }
 
         sessionURL = url
-        addressField.stringValue = isStartPageRequest ? "" : url.absoluteString
+        addressField.stringValue = url.absoluteString
 
         if url.isFileURL {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
@@ -1650,7 +1651,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             && QuartzStartPage.isStartPageURL(webView.url)
         if isShowingStartPage {
             sessionURL = QuartzStartPage.url
-            addressField.stringValue = ""
+            addressField.stringValue = QuartzStartPage.url.absoluteString
         }
 
         if isReaderModeActive {
@@ -1667,10 +1668,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             let displayURL = displayURLOverride ?? url
             isShowingStartPage = QuartzStartPage.isStartPageURL(displayURL)
             sessionURL = isShowingStartPage ? QuartzStartPage.url : displayURL
-            addressField.stringValue = isShowingStartPage ? "" : displayURL.absoluteString
+            addressField.stringValue = isShowingStartPage ? QuartzStartPage.url.absoluteString : displayURL.absoluteString
         }
         window.title = isShowingStartPage
-            ? "Quartz"
+            ? "Home - Quartz"
             : (webView.title?.isEmpty == false ? "\(webView.title!) - Quartz" : "Quartz")
         updateControls()
     }

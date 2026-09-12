@@ -49,9 +49,14 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var activeWebViewConstraints = [NSLayoutConstraint]()
     private var displayURLOverride: URL?
     private var webExtensionSupport: AnyObject?
-    private let facetClient = FacetOpenRouterClient()
+    private let facetClient: FacetOpenRouterClient
     private var activeFacetTask: Task<Void, Never>?
     private var activeFacetRequestID: UUID?
+    private let webMCP = QuartzWebMCPBridge()
+    private var activeFacetUsesPageTools = false
+    private var activeWebMCPPage: QuartzWebMCPPage?
+    private var activePageToolAlert: NSAlert?
+    private var isWebMCPHistoryNavigation = false
     private var facetModelOptionsTask: Task<Void, Never>?
     private var facetMessages = [FacetChatMessage]()
     private var hasLoadedFacetModels = false
@@ -127,12 +132,13 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private static let savedSessionURLKey = "Quartz.savedSession.url"
     private static let sandboxedExtensionPageScheme = "quartz-extension-sandbox"
 
-    init(sharedExtensionSupport: AnyObject? = nil, restoresSavedSession: Bool = true, focusesWindow: Bool = true, sessionDefaults: UserDefaults = .standard, facetPersonalization: FacetPersonalizationController? = nil) {
+    init(sharedExtensionSupport: AnyObject? = nil, restoresSavedSession: Bool = true, focusesWindow: Bool = true, sessionDefaults: UserDefaults = .standard, facetPersonalization: FacetPersonalizationController? = nil, facetClient: FacetOpenRouterClient = FacetOpenRouterClient()) {
         self.webExtensionSupport = sharedExtensionSupport
         self.restoresSavedSession = restoresSavedSession
         self.focusesWindowOnOpen = focusesWindow
         self.sessionDefaults = sessionDefaults
         self.facetPersonalization = facetPersonalization ?? FacetPersonalizationController(defaults: sessionDefaults)
+        self.facetClient = facetClient
         super.init()
     }
     private lazy var downloadCoordinator = QuartzDownloadCoordinator(window: { [weak self] in self?.window })
@@ -165,6 +171,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     func applicationWillTerminate(_ notification: Notification) {
         for browser in Self.openBrowsers {
+            browser.cancelPageToolExecution()
             browser.activeFacetTask?.cancel()
             browser.facetModelOptionsTask?.cancel()
             browser.facetPersonalization.stop()
@@ -178,6 +185,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         hasClosedWindow = true
         initialNavigation = nil
         pendingNavigationURL = nil
+        cancelPageToolExecution()
         activeFacetTask?.cancel()
         facetModelOptionsTask?.cancel()
         if let facetPersonalizationObserver {
@@ -223,6 +231,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         )
         let userContentController = WKUserContentController()
         configuration.userContentController = userContentController
+        QuartzWebMCPBridge.install(in: userContentController)
         adBlocker.connect(to: userContentController)
 
         if #available(macOS 15.4, *) {
@@ -565,6 +574,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
             return
         }
 
+        invalidatePageTools()
         NSLayoutConstraint.deactivate(activeWebViewConstraints)
         webView.removeFromSuperview()
         webView = newWebView
@@ -1431,6 +1441,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard activeFacetRequestID == nil else { return }
         let requestID = UUID()
         activeFacetRequestID = requestID
+        activeFacetUsesPageTools = panel.usesPageTools
         panel.appendUserMessage(prompt)
         panel.setRunning(true)
 
@@ -1462,6 +1473,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func facetPanelDidRequestCancel(_ panel: FacetPanelView) {
+        cancelPageToolExecution()
         activeFacetRequestID = nil
         activeFacetTask?.cancel()
         activeFacetTask = nil
@@ -1484,6 +1496,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     func facetPanelDidRequestClearHistory(_ panel: FacetPanelView) {
         // Cancel current exchanges too, so a late response cannot restore cleared history.
         for browser in Self.openBrowsers where browser.facetPersonalization === facetPersonalization {
+            browser.cancelPageToolExecution()
             browser.activeFacetRequestID = nil
             browser.activeFacetTask?.cancel()
             browser.activeFacetTask = nil
@@ -1501,20 +1514,66 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         configuration: FacetConfiguration,
         apiKey: String
     ) {
-        let messages = FacetConversation.requestMessages(
-            userPrompt: userPrompt,
-            pageContext: pageContext,
-            previousMessages: facetMessages
-        )
-
         activeFacetTask = Task { [weak self] in
             guard let self else { return }
 
             do {
-                let output = try await self.facetClient.run(
-                    messages: messages,
-                    configuration: configuration,
-                    apiKey: apiKey
+                let page: QuartzWebMCPPage?
+                if self.activeFacetUsesPageTools, self.webView === self.standardWebView {
+                    page = try await self.webMCP.discover(in: self.webView)
+                } else {
+                    page = nil
+                }
+                try Task.checkCancellation()
+                guard self.activeFacetRequestID == requestID else { return }
+                self.activeWebMCPPage = page
+                let tools = page?.definitions ?? []
+                if self.activeFacetUsesPageTools {
+                    self.facetPanelView.appendSystemMessage(tools.isEmpty
+                        ? "This page has no supported WebMCP tools."
+                        : "\(tools.count) page tool\(tools.count == 1 ? " is" : "s are") available. Quartz will ask before each tool runs.")
+                }
+                let messages = FacetConversation.requestMessages(
+                    userPrompt: userPrompt, pageContext: pageContext,
+                    previousMessages: self.facetMessages, toolsEnabled: !tools.isEmpty
+                )
+                let output = try await FacetToolSession.run(
+                    messages: messages, tools: tools,
+                    requestTurn: { messages, tools in
+                        try await self.facetClient.requestTurn(
+                            messages: messages, configuration: configuration, apiKey: apiKey,
+                            tools: tools.isEmpty ? nil : tools
+                        )
+                    },
+                    execute: { call, input in
+                        guard let page, let tool = page.tool(named: call.name),
+                              self.activeFacetRequestID == requestID,
+                              !self.hasClosedWindow, self.webView === self.standardWebView else {
+                            throw CancellationError()
+                        }
+                        do {
+                            try await self.webMCP.validate(page, tool: tool, in: self.webView)
+                            let approved = await self.confirmPageTool(tool, input: input, page: page)
+                            try Task.checkCancellation()
+                            guard approved, self.activeFacetRequestID == requestID else {
+                                self.facetPanelView.appendSystemMessage("Page tool canceled. No further tools will run for this request.")
+                                throw CancellationError()
+                            }
+                            self.facetPanelView.appendSystemMessage("Running \(tool.name)…")
+                            let result = try await self.webMCP.execute(tool, input: input, page: page, in: self.webView)
+                            self.facetPanelView.appendSystemMessage("\(tool.name) completed.")
+                            return result
+                        } catch QuartzWebMCPError.pageChanged {
+                            self.facetPanelView.appendSystemMessage(QuartzWebMCPError.pageChanged.localizedDescription)
+                            throw CancellationError()
+                        } catch {
+                            if error is CancellationError { throw error }
+                            // A page may fail after performing a side effect. End this
+                            // request instead of letting the model retry an uncertain action.
+                            self.facetPanelView.appendSystemMessage("Page tool stopped: \(error.localizedDescription)\nReview the page before trying again.")
+                            throw CancellationError()
+                        }
+                    }
                 )
                 guard !Task.isCancelled, self.activeFacetRequestID == requestID else { return }
                 // Keep completed exchanges only; page extracts belong only to the request that enabled them.
@@ -1523,15 +1582,75 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
                 self.facetMessages = Array(self.facetMessages.suffix(8))
                 self.facetPersonalization.appendExchange(userPrompt: userPrompt, assistantReply: output)
                 self.facetPanelView.appendAgentMessage(output)
+            } catch is CancellationError {
+                // Explicit Stop, denied approval, or document changes end the tool loop.
             } catch {
                 guard !Task.isCancelled, self.activeFacetRequestID == requestID else { return }
                 self.facetPanelView.appendSystemMessage(error.localizedDescription)
             }
 
+            guard self.activeFacetRequestID == requestID else { return }
+            self.cancelPageToolExecution()
             self.activeFacetRequestID = nil
             self.activeFacetTask = nil
             self.facetPanelView.setRunning(false)
         }
+    }
+
+    private func confirmPageTool(_ tool: QuartzWebMCPTool, input: FacetJSONValue, page: QuartzWebMCPPage) async -> Bool {
+        guard !Task.isCancelled, !hasClosedWindow else { return false }
+        let alert = NSAlert()
+        alert.messageText = "Allow this page tool?"
+        let site = "\(page.url.scheme ?? "https")://\(page.url.host ?? "")\(page.url.port.map { ":\($0)" } ?? "")"
+        alert.informativeText = "Site: \(site)\n\nThe website will run this action using your current session. Its result will be sent to OpenRouter."
+        let allowButton = alert.addButton(withTitle: "Allow once")
+        let cancelButton = alert.addButton(withTitle: "Cancel")
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 180))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let text = NSTextView(frame: scroll.bounds)
+        text.isEditable = false
+        text.isSelectable = true
+        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let arguments = (try? encoder.encode(input)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        text.string = "Tool: \(tool.name)\n\nWebsite-provided description:\n\(tool.description.prefix(2000))\n\nArguments:\n\(arguments)"
+        text.setAccessibilityLabel("Page tool arguments")
+        scroll.documentView = text
+        alert.accessoryView = scroll
+        activePageToolAlert = alert
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { [weak self] response in
+                if self?.activePageToolAlert === alert { self?.activePageToolAlert = nil }
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+            // NSAlert configures default keys when it presents the sheet. Apply
+            // our safe default afterwards so Return can never approve an action.
+            allowButton.keyEquivalent = ""
+            cancelButton.keyEquivalent = "\r"
+            alert.window.defaultButtonCell = cancelButton.cell as? NSButtonCell
+        }
+    }
+
+    private func cancelPageToolExecution() {
+        if let alert = activePageToolAlert {
+            window?.endSheet(alert.window, returnCode: .alertSecondButtonReturn)
+            activePageToolAlert = nil
+        }
+        if let page = activeWebMCPPage, let webView {
+            webMCP.cancel(in: webView, documentID: page.documentID)
+        }
+        activeWebMCPPage = nil
+        activeFacetUsesPageTools = false
+    }
+
+    private func invalidatePageTools() {
+        if activeFacetUsesPageTools, activeFacetRequestID != nil {
+            facetPanelDidRequestCancel(facetPanelView)
+            facetPanelView.appendSystemMessage("The page changed. Send your request again to use its tools.")
+        }
+        webMCP.invalidate()
     }
 
     private func loadFacetModelOptions() {
@@ -1603,6 +1722,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        if webView === self.webView { invalidatePageTools() }
         updateControls()
     }
 
@@ -1635,6 +1755,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
 
         if webView === self.webView, navigationAction.targetFrame?.isMainFrame == true, !navigationAction.shouldPerformDownload {
+            isWebMCPHistoryNavigation = navigationAction.navigationType == .backForward
             pendingNavigationURL = displayURLOverride ?? url
         }
         decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
@@ -1645,6 +1766,9 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
     ) {
+        if webView === self.webView, navigationResponse.isForMainFrame {
+            webMCP.receiveMainDocumentResponse(navigationResponse.response)
+        }
         let shouldDownload = QuartzDownloadPolicy.shouldDownload(
             navigationResponse.response, canShowMIMEType: navigationResponse.canShowMIMEType
         )
@@ -1707,7 +1831,11 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if webView === self.webView { pendingNavigationURL = nil }
+        if webView === self.webView {
+            pendingNavigationURL = nil
+            webMCP.commitMainDocument(history: webView.backForwardList, isHistoryNavigation: isWebMCPHistoryNavigation)
+            isWebMCPHistoryNavigation = false
+        }
         isShowingStartPage = webView === standardWebView
             && QuartzStartPage.isStartPageURL(webView.url)
         if isShowingStartPage {

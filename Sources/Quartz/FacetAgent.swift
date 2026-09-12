@@ -43,6 +43,7 @@ final class FacetPanelView: NSView {
     private let transcriptTextView = NSTextView()
     private let promptField = NSTextField()
     private let includePageCheckbox = NSButton(checkboxWithTitle: "Current page", target: nil, action: nil)
+    private let pageToolsCheckbox = NSButton(checkboxWithTitle: "Page tools (WebMCP)", target: nil, action: nil)
     private let modelPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let reasoningPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sendButton = FacetPanelView.makeCommandButton(
@@ -58,6 +59,7 @@ final class FacetPanelView: NSView {
     private let closeButton = FacetPanelView.makeIconButton(symbolName: "xmark", description: "Hide Facet")
 
     private(set) var isRunning = false
+    var usesPageTools: Bool { pageToolsCheckbox.state == .on }
     private var isLoadingModels = false
 
     private enum PreferenceKeys {
@@ -113,6 +115,7 @@ final class FacetPanelView: NSView {
         sendButton.isHidden = running
         stopButton.isHidden = !running
         includePageCheckbox.isEnabled = !running
+        pageToolsCheckbox.isEnabled = !running
         modelPopup.isEnabled = !running
         reasoningPopup.isEnabled = !running && !supportedReasoningEfforts.isEmpty
         apiKeyField.isEnabled = !running
@@ -218,6 +221,9 @@ final class FacetPanelView: NSView {
         includePageCheckbox.font = .systemFont(ofSize: 12)
 
         includePageCheckbox.toolTip = "Send this page's URL, title, selected text, and text excerpt to OpenRouter with your question."
+        pageToolsCheckbox.state = .off
+        pageToolsCheckbox.font = .systemFont(ofSize: 12)
+        pageToolsCheckbox.toolTip = "Send this site's WebMCP tool descriptions and approved results to OpenRouter. Quartz asks before each tool runs."
         configurePopup(modelPopup, description: "OpenRouter model")
         configurePopup(reasoningPopup, description: "OpenRouter reasoning effort")
         setModelOptions(FacetModelOption.fallbackOptions)
@@ -296,7 +302,7 @@ final class FacetPanelView: NSView {
         actionRow.spacing = 8
         actionRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let content = NSStackView(views: [titleRow, keyRow, keyStatusRow, transcriptScrollView, historyControls, settingsGrid, promptField, actionRow])
+        let content = NSStackView(views: [titleRow, keyRow, keyStatusRow, transcriptScrollView, historyControls, settingsGrid, pageToolsCheckbox, promptField, actionRow])
         content.orientation = .vertical
         content.alignment = .width
         content.spacing = 10

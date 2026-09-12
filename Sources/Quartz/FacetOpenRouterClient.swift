@@ -37,6 +37,46 @@ struct FacetModelOption: Sendable, Equatable {
 struct FacetChatMessage: Codable, Sendable, Equatable {
     let role: String
     let content: String
+    let toolCalls: [FacetToolCall]?
+    let toolCallID: String?
+    let reasoningDetails: FacetJSONValue?
+
+    init(role: String, content: String, toolCalls: [FacetToolCall]? = nil, toolCallID: String? = nil, reasoningDetails: FacetJSONValue? = nil) {
+        self.role = role
+        self.content = content
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.reasoningDetails = reasoningDetails
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(String.self, forKey: .role)
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        toolCalls = try container.decodeIfPresent([FacetToolCall].self, forKey: .toolCalls)
+        toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
+        reasoningDetails = try container.decodeIfPresent(FacetJSONValue.self, forKey: .reasoningDetails)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        if role == "assistant", content.isEmpty, toolCalls?.isEmpty == false {
+            try container.encodeNil(forKey: .content)
+        } else {
+            try container.encode(content, forKey: .content)
+        }
+        try container.encodeIfPresent(toolCalls, forKey: .toolCalls)
+        try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
+        try container.encodeIfPresent(reasoningDetails, forKey: .reasoningDetails)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role, content
+        case toolCalls = "tool_calls"
+        case toolCallID = "tool_call_id"
+        case reasoningDetails = "reasoning_details"
+    }
 }
 
 enum FacetOpenRouterError: LocalizedError, Sendable {
@@ -102,6 +142,15 @@ final class FacetOpenRouterClient: Sendable {
     }
 
     func run(messages: [FacetChatMessage], configuration: FacetConfiguration, apiKey: String) async throws -> String {
+        try await requestTurn(messages: messages, configuration: configuration, apiKey: apiKey).content
+    }
+
+    func requestTurn(
+        messages: [FacetChatMessage],
+        configuration: FacetConfiguration,
+        apiKey: String,
+        tools: [FacetToolDefinition]? = nil
+    ) async throws -> FacetAssistantTurn {
         try Task.checkCancellation()
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw FacetOpenRouterError.missingAPIKey }
@@ -118,7 +167,9 @@ final class FacetOpenRouterClient: Sendable {
         request.httpBody = try JSONEncoder().encode(ChatRequest(
             model: configuration.modelID,
             messages: messages,
-            reasoning: configuration.reasoningEffortValue.map { Reasoning(effort: $0) }
+            reasoning: configuration.reasoningEffortValue.map { Reasoning(effort: $0) },
+            tools: tools?.isEmpty == false ? tools : nil,
+            parallelToolCalls: tools?.isEmpty == false ? false : nil
         ))
 
         let body = try await responseBody(for: request, apiKey: key)
@@ -151,11 +202,45 @@ final class FacetOpenRouterClient: Sendable {
         } else {
             throw FacetOpenRouterError.invalidResponse
         }
-        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let toolCalls: [FacetToolCall]
+        if let rawCalls = message["tool_calls"], !(rawCalls is NSNull) {
+            guard let calls = rawCalls as? [[String: Any]], calls.count <= 128 else {
+                throw FacetOpenRouterError.invalidResponse
+            }
+            do {
+                toolCalls = try JSONDecoder().decode([FacetToolCall].self, from: JSONSerialization.data(withJSONObject: calls))
+            } catch {
+                throw FacetOpenRouterError.invalidResponse
+            }
+        } else {
+            toolCalls = []
+        }
+        guard toolCalls.isEmpty || tools?.isEmpty == false else {
+            throw FacetToolSessionError.invalidToolCall
+        }
+        // Never execute arguments from a completion that stopped before it finished generating.
+        if !toolCalls.isEmpty, let reason = choice["finish_reason"] as? String,
+           reason != "tool_calls" && reason != "stop" {
+            throw FacetToolSessionError.invalidToolCall
+        }
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !toolCalls.isEmpty else {
             throw FacetOpenRouterError.emptyResponse
         }
+        // Some reasoning models require their opaque reasoning details on the next tool turn.
+        // These details are never surfaced as reply text or persisted in the chat transcript.
+        let reasoningDetails: FacetJSONValue?
+        if !toolCalls.isEmpty, let details = message["reasoning_details"], !(details is NSNull) {
+            guard let data = try? JSONSerialization.data(withJSONObject: details, options: [.fragmentsAllowed]),
+                  data.count <= 262_144,
+                  let decoded = try? JSONDecoder().decode(FacetJSONValue.self, from: data) else {
+                throw FacetOpenRouterError.invalidResponse
+            }
+            reasoningDetails = decoded
+        } else {
+            reasoningDetails = nil
+        }
         try Task.checkCancellation()
-        return content
+        return FacetAssistantTurn(content: content, toolCalls: toolCalls, reasoningDetails: reasoningDetails)
     }
 
     func loadModelOptions() async throws -> [FacetModelOption] {
@@ -249,7 +334,14 @@ final class FacetOpenRouterClient: Sendable {
         let model: String
         let messages: [FacetChatMessage]
         let reasoning: Reasoning?
+        let tools: [FacetToolDefinition]?
+        let parallelToolCalls: Bool?
         let stream = false
+
+        private enum CodingKeys: String, CodingKey {
+            case model, messages, reasoning, tools, stream
+            case parallelToolCalls = "parallel_tool_calls"
+        }
     }
 
     private struct Reasoning: Encodable {

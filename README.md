@@ -60,6 +60,7 @@ process, including rebuilding the ZIP after stapling.
 - Reading mode for article-focused pages
 - File downloads with a native save dialog and completion feedback
 - Facet side-panel assistant powered by OpenRouter
+- Experimental WebMCP page tools with native confirmation in Facet
 - Optional Chromium-format WebExtension installation on macOS 15.4+, including Chrome Web Store downloads
 - Address/search field
 - Back, forward, reload, stop, home, reading, and Facet controls
@@ -116,6 +117,12 @@ Facet is a docked AI assistant panel inside Quartz, powered by OpenRouter. Open 
 Choose an OpenRouter model and an optional reasoning level, then ask a question. The default model uses OpenRouter's automatic routing; the default reasoning option lets the model use its own settings. Available models and supported reasoning options depend on OpenRouter and the selected provider.
 
 Facet sends your prompt and recent conversation to OpenRouter and the selected model provider. When **Current page** is enabled, the request also includes the active page URL, title, selected text, description, and a bounded visible-text excerpt. Turn **Current page** off to omit that page context from future requests.
+
+Enable **Page tools** to let Facet use WebMCP tools declared by the active website.
+It is off by default, and Quartz asks for native confirmation before every tool
+execution. Tool descriptions, schemas, and results are shared with your selected
+model provider. See the [WebMCP guide and local example](docs/webmcp.md) for setup
+and the experimental compatibility limits.
 
 For Curiosity Spark personalization, Quartz saves up to 100 completed prompt/reply pairs on this Mac, capped at 4,000 characters per message. It sends a bounded selection of recent chat text to OpenRouter for daily generation, giving user messages more weight than assistant replies. Raw page-context attachments, errors, and canceled requests are not saved in this history; a reply may still discuss the page you asked about. Chats from before this feature was installed cannot be recovered. **Clear saved chats** in Facet clears saved history, current conversations in all windows, and personalized sparks, and cancels pending generation. New completed chats begin personalization again.
 

@@ -1,3 +1,10 @@
+# [0.16.0](https://github.com/QuartzBrowser/Quartz/compare/v0.15.0...v0.16.0) (2026-09-12)
+
+
+### Features
+
+* **flags:** add experimental WebMCP toggle ([d0659a5](https://github.com/QuartzBrowser/Quartz/commit/d0659a50b4b4638b002362398b701a61e69c9f47))
+
 # [0.15.0](https://github.com/QuartzBrowser/Quartz/compare/v0.14.1...v0.15.0) (2026-09-12)
 
 

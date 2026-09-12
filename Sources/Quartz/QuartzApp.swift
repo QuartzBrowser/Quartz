@@ -12,6 +12,13 @@ struct QuartzApp {
         let app = NSApplication.shared
         let delegate = BrowserController()
 
+        // Packaged apps keep the icon in the main bundle; SwiftPM runs use its resource bundle.
+        let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+            ?? Bundle.module.url(forResource: "AppIcon", withExtension: "icns")
+        if let iconURL, let icon = NSImage(contentsOf: iconURL) {
+            app.applicationIconImage = icon
+        }
+
         browserController = delegate
         app.delegate = delegate
         app.setActivationPolicy(.regular)

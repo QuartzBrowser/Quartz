@@ -1,5 +1,7 @@
 # Quartz
 
+<img src="Artwork/AppIcon.png" width="128" height="128" alt="Quartz app icon: a faceted blue and teal crystal Q">
+
 A native macOS web browser.
 
 ## Screenshots

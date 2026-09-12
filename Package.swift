@@ -17,6 +17,7 @@ let package = Package(
         .executableTarget(
             name: "Quartz",
             dependencies: [.product(name: "Sparkle", package: "Sparkle")],
+            resources: [.copy("Resources/AppIcon.icns")],
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
             ]

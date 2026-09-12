@@ -18,6 +18,8 @@ final class FacetOpenRouterClientTests: XCTestCase, @unchecked Sendable {
             let body = try Self.requestBody(request)
             XCTAssertEqual(body["model"] as? String, "example/text-model")
             XCTAssertEqual(body["stream"] as? Bool, false)
+            XCTAssertNil(body["tools"])
+            XCTAssertNil(body["parallel_tool_calls"])
             XCTAssertEqual((body["reasoning"] as? [String: String])?["effort"], "high")
             let sentMessages = try JSONDecoder().decode([FacetChatMessage].self, from: JSONSerialization.data(withJSONObject: body["messages"]!))
             XCTAssertEqual(sentMessages, messages)
@@ -42,6 +44,98 @@ final class FacetOpenRouterClientTests: XCTestCase, @unchecked Sendable {
         }
         defer { harness.finish() }
         _ = try await harness.client.run(messages: [], configuration: FacetConfiguration(model: " \n", reasoningEffort: "ultra"), apiKey: "test-key")
+    }
+
+    func testStructuredToolsAndToolOnlyResponseUseOpenRouterWireFormat() async throws {
+        let schema = FacetJSONValue.object([
+            "type": .string("object"),
+            "properties": .object(["query": .object(["type": .string("string")])]),
+            "required": .array([.string("query")])
+        ])
+        let tool = FacetToolDefinition(name: "page_search", description: "Search this page", inputSchema: schema)
+        let harness = makeClient { request in
+            let body = try Self.requestBody(request)
+            let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
+            XCTAssertEqual(tools.count, 1)
+            XCTAssertEqual(tools[0]["type"] as? String, "function")
+            let function = try XCTUnwrap(tools[0]["function"] as? [String: Any])
+            XCTAssertEqual(function["name"] as? String, "page_search")
+            XCTAssertEqual(function["description"] as? String, "Search this page")
+            XCTAssertEqual((function["parameters"] as? [String: Any])?["required"] as? [String], ["query"])
+            XCTAssertEqual(body["parallel_tool_calls"] as? Bool, false)
+            return .json(#"{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"page_search","arguments":"{\"query\":\"Quartz\"}"}}],"reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}]}}]}"#)
+        }
+        defer { harness.finish() }
+        let turn = try await harness.client.requestTurn(messages: [], configuration: defaultConfiguration, apiKey: "test-key", tools: [tool])
+        XCTAssertEqual(turn.content, "")
+        XCTAssertEqual(turn.toolCalls, [FacetToolCall(id: "call_1", name: "page_search", arguments: #"{"query":"Quartz"}"#)])
+        XCTAssertEqual(turn.reasoningDetails, .array([.object(["type": .string("reasoning.encrypted"), "data": .string("opaque")])]))
+    }
+
+    func testTextModeRejectsUnexpectedToolRequests() async {
+        let harness = makeClient { _ in
+            .json(#"{"choices":[{"message":{"content":"Done","tool_calls":[{"id":"call_1","type":"function","function":{"name":"page_search","arguments":"{}"}}]}}]}"#)
+        }
+        defer { harness.finish() }
+        do {
+            _ = try await harness.client.run(messages: [], configuration: defaultConfiguration, apiKey: "test-key")
+            XCTFail("Tool requests cannot masquerade as completed text in a text-only chat")
+        } catch let error as FacetToolSessionError {
+            guard case .invalidToolCall = error else { return XCTFail("Unexpected error: \(error)") }
+        } catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testMalformedAndTruncatedToolResponsesAreRejected() async {
+        let tool = FacetToolDefinition(name: "page_search", description: "Search", inputSchema: .object([:]))
+        for json in [
+            #"{"choices":[{"message":{"tool_calls":"invalid"}}]}"#,
+            #"{"choices":[{"message":{"tool_calls":[{"id":"a","type":"function","function":{"name":"page_search","arguments":{}}}]}}]}"#,
+            #"{"choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"page_search","arguments":"{}"}}]}}]}"#,
+            #"{"choices":[{"finish_reason":"length","message":{"tool_calls":[{"id":"a","type":"function","function":{"name":"page_search","arguments":"{}"}}]}}]}"#
+        ] {
+            let harness = makeClient { _ in .json(json) }
+            defer { harness.finish() }
+            do {
+                _ = try await harness.client.requestTurn(messages: [], configuration: defaultConfiguration, apiKey: "test-key", tools: [tool])
+                XCTFail("Malformed tool response accepted: \(json)")
+            } catch { /* Invalid or incomplete tool requests must not reach an executor. */ }
+        }
+    }
+
+    func testMessagesRemainCompatibleWithSavedTextAndEncodeToolHistory() throws {
+        let old = try JSONDecoder().decode(FacetChatMessage.self, from: Data(#"{"role":"user","content":"Hello"}"#.utf8))
+        XCTAssertEqual(old, FacetChatMessage(role: "user", content: "Hello"))
+        let call = FacetToolCall(id: "call_1", name: "page_search", arguments: "{}")
+        let messages = [
+            FacetChatMessage(role: "assistant", content: "", toolCalls: [call], reasoningDetails: .array([.string("opaque")])),
+            FacetChatMessage(role: "tool", content: #"{"found":true}"#, toolCallID: "call_1")
+        ]
+        let data = try JSONEncoder().encode(messages)
+        let wire = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        XCTAssertTrue(wire[0]["content"] is NSNull)
+        XCTAssertNotNil(wire[0]["tool_calls"])
+        XCTAssertEqual(wire[0]["reasoning_details"] as? [String], ["opaque"])
+        XCTAssertEqual(wire[1]["tool_call_id"] as? String, "call_1")
+        XCTAssertEqual(try JSONDecoder().decode([FacetChatMessage].self, from: data), messages)
+    }
+
+    func testOversizedToolMetadataFailsBeforeReturningAnExecutableTurn() async throws {
+        let tool = FacetToolDefinition(name: "page_search", description: "Search", inputSchema: .object([:]))
+        let call: [String: Any] = ["id": "a", "type": "function", "function": ["name": "page_search", "arguments": "{}"]]
+        for message in [
+            ["content": NSNull(), "tool_calls": Array(repeating: call, count: 129)],
+            ["content": NSNull(), "tool_calls": [call], "reasoning_details": [["data": String(repeating: "x", count: 262_145)]]]
+        ] as [[String: Any]] {
+            let json = String(decoding: try JSONSerialization.data(withJSONObject: ["choices": [["message": message]]]), as: UTF8.self)
+            let harness = makeClient { _ in .json(json) }
+            defer { harness.finish() }
+            do {
+                _ = try await harness.client.requestTurn(messages: [], configuration: defaultConfiguration, apiKey: "test-key", tools: [tool])
+                XCTFail("Oversized metadata must not produce an executable turn")
+            } catch let error as FacetOpenRouterError {
+                guard case .invalidResponse = error else { return XCTFail("Unexpected error: \(error)") }
+            }
+        }
     }
 
     func testMissingAndMalformedKeysFailBeforeNetwork() async {

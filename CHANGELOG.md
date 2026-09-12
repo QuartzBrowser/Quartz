@@ -1,3 +1,10 @@
+## [0.13.1](https://github.com/QuartzBrowser/Quartz/compare/v0.13.0...v0.13.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* keep the home page address bar blank ([113857c](https://github.com/QuartzBrowser/Quartz/commit/113857c5e5f4f338f683737b327fe1ab6a71354c))
+
 # [0.13.0](https://github.com/QuartzBrowser/Quartz/compare/v0.12.0...v0.13.0) (2026-09-12)
 
 

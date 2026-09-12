@@ -54,7 +54,7 @@ process, including rebuilding the ZIP after stapling.
 
 - WebKit-powered browsing
 - Multiple native browser windows, including extension-created pages
-- Native local start page with direct access to search, Facet, and extensions
+- Colorful local home page at `quartz://home` with search, discoveries, Facet, and extensions
 - In-browser updates with verified downloads, progress, and automatic restart
 - Tiny built-in ad blocker for obvious third-party ad resources
 - Reading mode for article-focused pages
@@ -65,9 +65,17 @@ process, including rebuilding the ZIP after stapling.
 - Back, forward, reload, stop, home, reading, and Facet controls
 - Basic keyboard menu items
 
-## Start Page
+## Home Page
 
-When there is no saved browsing session, Quartz opens a self-contained local start page instead of contacting a placeholder website. Its search box uses the same URL and DuckDuckGo search routing as the native address field, and its feature cards open the existing Facet panel and Extensions menu. The Home button always returns there; a valid saved web or file URL still takes precedence at launch.
+![Quartz home page](docs/screenshots/home-light.png)
+
+[View the home page in dark mode](docs/screenshots/home-dark.png).
+
+Visit `quartz://home` for a colorful launchpad with web search, quick links, and things to discover. The page is built into Quartz and works offline; opening a website or searching connects to the web. Its search box uses the same URL and DuckDuckGo search routing as the native address field, with direct access to the Facet panel and Extensions menu.
+
+Choose a Daydream, Orbit, or Golden color mood, spin the quartz crystal, or shuffle a daily curiosity spark for something new to explore. Home follows the system’s light/dark appearance and Reduce Motion preference.
+
+The Home button and new windows open `quartz://home`, and the older `quartz://start` address still works. Quartz also opens Home when there is no saved browsing session; a valid saved web or file URL takes precedence at launch.
 
 Use **File > New Window** or **Command-N** to open another browser window.
 Extensions that request a new tab or window also receive a separate window,

@@ -5,6 +5,66 @@ import XCTest
 
 @MainActor
 final class QuartzBrowserWindowTests: XCTestCase {
+    func testHomeLaunchAddressEntryAndNewWindows() async throws {
+        _ = NSApplication.shared
+        let suite = "QuartzBrowserHomeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let browser = makeBrowser(defaults: defaults)
+        browser.start()
+        defer { browser.extensionWindow?.close() }
+        try await waitUntil { browser.extensionURL == QuartzStartPage.url && browser.extensionWebView?.isLoading == false }
+        let content = try XCTUnwrap(browser.extensionWindow?.contentView)
+        let address = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSTextField }.first {
+            $0.placeholderString == "Search or enter website name"
+        })
+        XCTAssertEqual(address.stringValue, "quartz://home")
+        XCTAssertEqual(browser.extensionWindow?.title, "Home - Quartz")
+
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(suite).html")
+        try "<!doctype html><title>Saved page</title><p>A page to return from.</p>".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        browser.loadFromExtension(file)
+        try await waitUntil { browser.extensionURL == file && browser.extensionWebView?.isLoading == false }
+
+        let newWindow = browser.openBrowserWindow(focused: false)
+        defer { newWindow.extensionWindow?.close() }
+        try await waitUntil { newWindow.extensionURL == QuartzStartPage.url && newWindow.extensionWebView?.isLoading == false }
+        XCTAssertEqual(browser.extensionURL, file)
+
+        for homeAddress in ["quartz://home", "quartz://start"] {
+            address.stringValue = homeAddress
+            XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(address.action), to: address.target, from: address))
+            try await waitUntil { browser.extensionURL == QuartzStartPage.url && browser.extensionWebView?.isLoading == false }
+            XCTAssertEqual(address.stringValue, "quartz://home")
+            browser.loadFromExtension(file)
+            try await waitUntil { browser.extensionURL == file && browser.extensionWebView?.isLoading == false }
+        }
+
+        let home = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSButton }.first { $0.toolTip == "Home" })
+        home.performClick(nil)
+        try await waitUntil { browser.extensionURL == QuartzStartPage.url && browser.extensionWebView?.isLoading == false }
+        XCTAssertEqual(address.stringValue, "quartz://home")
+    }
+
+    func testSavedSessionStillTakesPrecedenceOverHome() async throws {
+        _ = NSApplication.shared
+        let suite = "QuartzBrowserRestoreTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(suite).html")
+        try "<!doctype html><title>Restored page</title><p>Keep my place.</p>".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        defaults.set(file.absoluteString, forKey: "Quartz.savedSession.url")
+        let browser = makeBrowser(defaults: defaults)
+        browser.start()
+        defer { browser.extensionWindow?.close() }
+        try await waitUntil { browser.extensionURL == file && browser.extensionWebView?.isLoading == false }
+        let webView = try XCTUnwrap(browser.extensionWebView)
+        let title = try await script("return document.title;", in: webView) as? String
+        XCTAssertEqual(title, "Restored page")
+    }
+
     func testRealExtensionAPIsPreservePagesReportWindowsAndCloseTabs() async throws {
         guard #available(macOS 15.4, *) else { throw XCTSkip("WebExtensions require macOS 15.4") }
         _ = NSApplication.shared
@@ -106,6 +166,19 @@ final class QuartzBrowserWindowTests: XCTestCase {
         let updatesValue = try await script("return window.updatedTabs;", in: api)
         let updates = try XCTUnwrap(updatesValue as? [[String: Any]])
         XCTAssertTrue(updates.contains { ($0["id"] as? Int) == tabID && ($0["url"] as? String) == updatedURL.absoluteString })
+    }
+
+    private func makeBrowser(defaults: UserDefaults) -> BrowserController {
+        if #available(macOS 15.4, *) {
+            let initial = BrowserController(sessionDefaults: defaults)
+            let support = QuartzWebExtensionSupport(browser: initial, webViewConfiguration: WKWebViewConfiguration(), defaults: defaults)
+            return BrowserController(sharedExtensionSupport: support, focusesWindow: false, sessionDefaults: defaults)
+        }
+        return BrowserController(focusesWindow: false, sessionDefaults: defaults)
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants(of: $0) }
     }
 
     private func script(_ body: String, arguments: [String: Any] = [:], in webView: WKWebView) async throws -> Any? {

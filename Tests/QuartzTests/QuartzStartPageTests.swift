@@ -33,6 +33,7 @@ final class QuartzStartPageTests: XCTestCase {
         XCTAssertTrue(QuartzStartPage.html.contains("Home — Quartz"))
         XCTAssertTrue(QuartzStartPage.html.contains("Open Facet"))
         XCTAssertTrue(QuartzStartPage.html.contains("Open Extensions"))
+        XCTAssertTrue(QuartzStartPage.html.contains(#"href="quartz://flags/">Flags</a>"#))
         XCTAssertTrue(QuartzStartPage.html.contains("Search or enter an address"))
         XCTAssertFalse(QuartzStartPage.html.contains("www.example.com"))
     }
@@ -137,6 +138,24 @@ final class QuartzStartPageTests: XCTestCase {
 }
 
 final class QuartzURLRoutingTests: XCTestCase {
+    func testFlagsURLsNormalizeAndRemainRestorable() {
+        for input in ["quartz://flags", "quartz://flags/", "QUARTZ://FLAGS/", "quartz://flags/#webmcp", " \nquartz://flags/\t"] {
+            let url = QuartzURLRouting.normalizedURL(from: input)
+            XCTAssertEqual(url, QuartzFlagsPage.url, input)
+            XCTAssertTrue(QuartzURLRouting.isStandardBrowsingURL(QuartzFlagsPage.url), input)
+            XCTAssertTrue(QuartzURLRouting.isRestorableSessionURL(QuartzFlagsPage.url), input)
+        }
+    }
+
+    func testMalformedFlagsURLsAreNotAllowedAsInternalBrowsingPages() {
+        for input in ["quartz://flags/path", "quartz://flags//", "quartz://flags/%2F", "quartz://flags?webmcp=enabled", "quartz://user@flags", "quartz://flags:443"] {
+            let url = URL(string: input)!
+            XCTAssertFalse(QuartzURLRouting.isStandardBrowsingURL(url), input)
+            XCTAssertFalse(QuartzURLRouting.isRestorableSessionURL(url), input)
+            XCTAssertEqual(QuartzURLRouting.normalizedURL(from: input)?.host, "duckduckgo.com", input)
+        }
+    }
+
     func testHomeURLsAndLegacyAliasNormalizeToCanonicalHome() {
         for input in ["quartz://home", "quartz://home/", "QUARTZ://HOME", "quartz://home#explore", "quartz://start", "quartz://start/", " \nquartz://home\t"] {
             XCTAssertEqual(QuartzURLRouting.normalizedURL(from: input), QuartzStartPage.url, input)

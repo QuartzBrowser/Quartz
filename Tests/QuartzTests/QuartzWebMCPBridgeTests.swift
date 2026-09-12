@@ -7,6 +7,11 @@ import XCTest
 final class QuartzWebMCPBridgeTests: XCTestCase, WKNavigationDelegate {
     private var loaded: XCTestExpectation?
 
+    @MainActor
+    private final class EnablementState {
+        var isEnabled = true
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded?.fulfill() }
 
     private func makeWebView() -> (NSWindow, WKWebView) {
@@ -60,6 +65,130 @@ final class QuartzWebMCPBridgeTests: XCTestCase, WKNavigationDelegate {
         }
     }
 
+    func testScriptFlagIsIdempotentAndPreservesUnrelatedUserScripts() throws {
+        let controller = WKUserContentController()
+        let reader = WKUserScript(source: "window.readerAvailable = true;", injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        let blocker = WKUserScript(source: "window.blockerAvailable = true;", injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        controller.addUserScript(reader)
+        controller.addUserScript(blocker)
+
+        QuartzWebMCPBridge.setEnabled(false, in: controller)
+        XCTAssertEqual(controller.userScripts.map(\.source), [reader.source, blocker.source])
+        QuartzWebMCPBridge.setEnabled(true, in: controller)
+        QuartzWebMCPBridge.setEnabled(true, in: controller)
+        QuartzWebMCPBridge.install(in: controller)
+        XCTAssertEqual(controller.userScripts.map(\.source), [reader.source, blocker.source, QuartzWebMCPScript.source])
+
+        QuartzWebMCPBridge.setEnabled(false, in: controller)
+        QuartzWebMCPBridge.setEnabled(false, in: controller)
+        XCTAssertEqual(controller.userScripts.map(\.source), [reader.source, blocker.source])
+        let restoredReader = try XCTUnwrap(controller.userScripts.first)
+        let restoredBlocker = try XCTUnwrap(controller.userScripts.dropFirst().first)
+        XCTAssertEqual(restoredReader.injectionTime, .atDocumentEnd)
+        XCTAssertTrue(restoredReader.isForMainFrameOnly)
+        XCTAssertEqual(restoredBlocker.injectionTime, .atDocumentStart)
+        XCTAssertFalse(restoredBlocker.isForMainFrameOnly)
+
+        QuartzWebMCPBridge.setEnabled(true, in: controller)
+        XCTAssertEqual(controller.userScripts.map(\.source), [reader.source, blocker.source, QuartzWebMCPScript.source])
+    }
+
+    func testDisablingFlagBlocksDiscoveryAndPreviouslyDiscoveredToolsUntilReenabled() async throws {
+        let (window, webView) = makeWebView()
+        defer { window.close() }
+        await load(in: webView)
+        _ = try await webView.callAsyncJavaScript("""
+        window.executionCount = 0;
+        await document.modelContext.registerTool({
+          name: 'count', description: 'Count executions', inputSchema: {type:'object'},
+          execute: () => ({count: ++window.executionCount})
+        });
+        return true;
+        """, arguments: [:], in: nil, contentWorld: .page)
+        let state = EnablementState()
+        let bridge = QuartzWebMCPBridge(isEnabled: { state.isEnabled })
+        let discovered = try await bridge.discover(in: webView)
+        let page = try XCTUnwrap(discovered)
+        let tool = try XCTUnwrap(page.tools.first)
+
+        state.isEnabled = false
+        let disabledDiscovery = try await bridge.discover(in: webView)
+        XCTAssertNil(disabledDiscovery)
+        do {
+            try await bridge.validate(page, tool: tool, in: webView)
+            XCTFail("Disabled WebMCP must invalidate a pending approval")
+        } catch QuartzWebMCPError.disabled {}
+        do {
+            _ = try await bridge.execute(tool, input: .object([:]), page: page, in: webView)
+            XCTFail("Disabled WebMCP must not execute a previously discovered tool")
+        } catch QuartzWebMCPError.disabled {}
+        let count = try await webView.callAsyncJavaScript("return window.executionCount;", arguments: [:], in: nil, contentWorld: .page)
+        XCTAssertEqual(count as? Int, 0)
+
+        state.isEnabled = true
+        let rediscovered = try await bridge.discover(in: webView)
+        let restoredPage = try XCTUnwrap(rediscovered)
+        let result = try await bridge.execute(try XCTUnwrap(restoredPage.tools.first), input: .object([:]), page: restoredPage, in: webView)
+        XCTAssertEqual(result, .object(["count": .number(1)]))
+    }
+
+    func testDisablingFlagRejectsAnInFlightToolResult() async throws {
+        let (window, webView) = makeWebView()
+        defer { window.close() }
+        await load(in: webView)
+        _ = try await webView.callAsyncJavaScript("""
+        await document.modelContext.registerTool({
+          name: 'deferred', description: 'Wait for completion', inputSchema: {type:'object'},
+          execute: () => new Promise(resolve => {
+            window.finishTool = () => resolve({completed: true});
+          })
+        });
+        return true;
+        """, arguments: [:], in: nil, contentWorld: .page)
+        let state = EnablementState()
+        let bridge = QuartzWebMCPBridge(isEnabled: { state.isEnabled })
+        let discovered = try await bridge.discover(in: webView)
+        let page = try XCTUnwrap(discovered)
+        let tool = try XCTUnwrap(page.tools.first)
+        let execution = Task { try await bridge.execute(tool, input: .object([:]), page: page, in: webView) }
+        defer { execution.cancel() }
+        let deadline = Date().addingTimeInterval(10)
+        while true {
+            let started = try await webView.callAsyncJavaScript("return typeof window.finishTool === 'function';", arguments: [:], in: nil, contentWorld: .page)
+            if started as? Bool == true { break }
+            guard Date() < deadline else { return XCTFail("Tool execution did not begin") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        state.isEnabled = false
+        _ = try await webView.callAsyncJavaScript("window.finishTool(); return true;", arguments: [:], in: nil, contentWorld: .page)
+        do {
+            _ = try await execution.value
+            XCTFail("A result received after disabling WebMCP must not reach Facet")
+        } catch QuartzWebMCPError.disabled {}
+    }
+
+    func testScriptFlagAppliesWhenTheDocumentReloads() async throws {
+        let (window, webView) = makeWebView()
+        defer { window.close() }
+        let controller = webView.configuration.userContentController
+        QuartzWebMCPBridge.setEnabled(false, in: controller)
+        await load(in: webView)
+        let disabled = try await webView.callAsyncJavaScript("return typeof globalThis.__quartzWebMCP;", arguments: [:], in: nil, contentWorld: .page)
+        XCTAssertEqual(disabled as? String, "undefined")
+
+        QuartzWebMCPBridge.setEnabled(true, in: controller)
+        await load(in: webView)
+        try await register(in: webView)
+        let enabled = try await QuartzWebMCPBridge().discover(in: webView)
+        XCTAssertEqual(enabled?.tools.count, 1)
+
+        QuartzWebMCPBridge.setEnabled(false, in: controller)
+        await load(in: webView)
+        let disabledAgain = try await webView.callAsyncJavaScript("return typeof globalThis.__quartzWebMCP;", arguments: [:], in: nil, contentWorld: .page)
+        XCTAssertEqual(disabledAgain as? String, "undefined")
+    }
+
     func testDiscoveryExecutionAndAliasMappingInRealWebKit() async throws {
         let (window, webView) = makeWebView()
         defer { window.close() }
@@ -111,6 +240,27 @@ final class QuartzWebMCPBridgeTests: XCTestCase, WKNavigationDelegate {
         bridge.commitMainDocument()
         let restored = try await bridge.discover(in: webView)
         XCTAssertEqual(restored?.tools.count, 1)
+    }
+
+    func testFlagInvalidationPreservesPendingResponsePermissionsPolicy() async throws {
+        let (window, webView) = makeWebView()
+        defer { window.close() }
+        await load(in: webView)
+        try await register(in: webView)
+        let bridge = QuartzWebMCPBridge()
+        let initialGeneration = bridge.generation
+        bridge.receiveMainDocumentResponse(HTTPURLResponse(
+            url: webView.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Permissions-Policy": "tools=()"]
+        )!)
+
+        // A different window can toggle a flag after this response arrives but
+        // before WebKit commits the document. Its policy must survive the toggle.
+        bridge.invalidate(preservingPendingPolicy: true)
+        XCTAssertNotEqual(bridge.generation, initialGeneration)
+        bridge.commitMainDocument()
+        let discovered = try await bridge.discover(in: webView)
+        XCTAssertNil(discovered)
     }
 
     func testNavigationAndRegistrationReplacementInvalidatePendingTools() async throws {

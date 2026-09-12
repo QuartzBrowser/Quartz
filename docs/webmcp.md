@@ -8,15 +8,23 @@ the evolving WebMCP draft.
 
 ## Use page tools
 
-1. Visit a website that registers WebMCP tools. Use HTTPS, or a loopback HTTP
+1. Open `quartz://flags/` (or **View > Experimental Features…**) and set **WebMCP**
+   to **Enabled**. It is disabled by default and your choice is saved across
+   launches. Reload any websites that were already open to apply the change.
+2. Visit a website that registers WebMCP tools. Use HTTPS, or a loopback HTTP
    address such as `http://127.0.0.1:8000` for local development.
-2. Open **Facet**, configure an OpenRouter API key, and select a model that
+3. Open **Facet**, configure an OpenRouter API key, and select a model that
    supports function/tool calling.
-3. Enable **Page tools**, which is off by default, and ask Facet to use a page
+4. Enable **Page tools**, which is off by default, and ask Facet to use a page
    feature. **Current page** separately controls the page-text attachment.
-4. Review the native confirmation showing the website, tool, and arguments.
+5. Review the native confirmation showing the website, tool, and arguments.
    Approve to run the tool or cancel to decline it. Every invocation requires
    confirmation, including tools labeled as read-only.
+
+The flag applies across Quartz windows. Disabling it immediately stops Facet
+page tools and dismisses pending tool approvals. Reload open websites to remove
+the compatibility API from their documents; new page loads use the saved flag.
+The **Page tools** checkbox is unavailable while the flag is disabled.
 
 When **Page tools** is enabled, tool descriptions, parameter schemas, and results
 are sent to OpenRouter and the selected model provider as part of that request.
@@ -35,7 +43,8 @@ cd examples/webmcp
 python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:8000` in Quartz, enable **Page tools** in Facet, then try:
+Enable **WebMCP** at `quartz://flags/`, open `http://127.0.0.1:8000` in Quartz,
+and enable **Page tools** in Facet, then try:
 
 - “List the workshop inventory using this page's tools.”
 - “Search the inventory for paper.”

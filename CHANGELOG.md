@@ -1,3 +1,10 @@
+# [0.13.0](https://github.com/QuartzBrowser/Quartz/compare/v0.12.0...v0.13.0) (2026-09-12)
+
+
+### Features
+
+* add playful Quartz home page ([e900328](https://github.com/QuartzBrowser/Quartz/commit/e90032834d3da7e11d2233ff6ff9618ac1229abd))
+
 # [0.12.0](https://github.com/QuartzBrowser/Quartz/compare/v0.11.0...v0.12.0) (2026-09-12)
 
 

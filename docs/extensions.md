@@ -1,5 +1,11 @@
 # Writing and packaging a Quartz extension
 
+**Ad blockers are welcome, including extensions that replace Quartz's built-in
+blocker.** Quartz will not ban or deliberately obstruct them. Users may turn off
+the built-in blocker and choose a compatible extension instead. The
+[Extensions Policy](../EXTENSIONS_POLICY.md) states this commitment and explains
+the distinction between that policy and technical compatibility limits.
+
 Quartz loads Chromium-format WebExtensions through WebKit on **macOS 15.4 or
 newer**. The browser itself runs on macOS 14+, but its extension controls require
 the newer OS. WebKit implements the extension APIs, so installing a Chrome package

@@ -6,6 +6,9 @@ development checks, and pull request expectations for the macOS browser.
 ## Before You Start
 
 - Read and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Follow the [Extensions Policy](EXTENSIONS_POLICY.md): ad blockers are welcome,
+  including alternatives to Quartz's built-in blocker. Changes must not ban or
+  deliberately obstruct them or force users to use the built-in blocker.
 - Use GitHub issues for bug reports, feature requests, and design discussion.
 - Report vulnerabilities through the process in [SECURITY.md](SECURITY.md)
   instead of opening a public issue with exploit details.

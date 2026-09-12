@@ -21,6 +21,8 @@ protocol FacetPanelViewDelegate: AnyObject {
     func facetPanelDidRequestCancel(_ panel: FacetPanelView)
     func facetPanelDidRequestClose(_ panel: FacetPanelView)
     func facetPanelDidRequestModelRefresh(_ panel: FacetPanelView)
+    func facetPanelDidRequestClearHistory(_ panel: FacetPanelView)
+    func facetPanelSettingsDidChange(_ panel: FacetPanelView)
 }
 
 @MainActor
@@ -34,6 +36,7 @@ final class FacetPanelView: NSView {
     private let saveKeyButton = NSButton(title: "Save", target: nil, action: nil)
     private let removeKeyButton = NSButton(title: "Remove", target: nil, action: nil)
     private let getKeyButton = NSButton(title: "Get API key", target: nil, action: nil)
+    private let clearHistoryButton = NSButton(title: "Clear saved chats", target: nil, action: nil)
     private let refreshModelsButton = FacetPanelView.makeIconButton(symbolName: "arrow.clockwise", description: "Refresh OpenRouter models")
     private let apiKeyStore = FacetAPIKeyStore()
     private var modelOptions = [FacetModelOption]()
@@ -97,6 +100,10 @@ final class FacetPanelView: NSView {
 
     func appendSystemMessage(_ body: String) {
         appendMessage(author: "Facet", body: body, color: .secondaryLabelColor)
+    }
+
+    func clearTranscript() {
+        transcriptTextView.string = ""
     }
 
     func setRunning(_ running: Bool) {
@@ -249,6 +256,21 @@ final class FacetPanelView: NSView {
         keyStatusRow.alignment = .centerY
         keyStatusRow.spacing = 4
 
+        let historyDisclosure = NSTextField(wrappingLabelWithString:
+            "Completed chats are saved on this Mac. Facet sends recent chats to OpenRouter daily to personalize Curiosity Spark.")
+        historyDisclosure.font = .systemFont(ofSize: 11)
+        historyDisclosure.textColor = .secondaryLabelColor
+        historyDisclosure.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        clearHistoryButton.target = self
+        clearHistoryButton.action = #selector(clearHistoryPressed(_:))
+        clearHistoryButton.bezelStyle = .rounded
+        clearHistoryButton.controlSize = .small
+        clearHistoryButton.toolTip = "Clear saved Facet chats and reset your personalized Curiosity Spark."
+        let historyControls = NSStackView(views: [historyDisclosure, clearHistoryButton])
+        historyControls.orientation = .vertical
+        historyControls.alignment = .leading
+        historyControls.spacing = 4
+
         let modelLabel = FacetPanelView.makeSettingLabel("Model")
         let reasoningLabel = FacetPanelView.makeSettingLabel("Reasoning")
         let settingsGrid = NSGridView(views: [
@@ -274,7 +296,7 @@ final class FacetPanelView: NSView {
         actionRow.spacing = 8
         actionRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let content = NSStackView(views: [titleRow, keyRow, keyStatusRow, transcriptScrollView, settingsGrid, promptField, actionRow])
+        let content = NSStackView(views: [titleRow, keyRow, keyStatusRow, transcriptScrollView, historyControls, settingsGrid, promptField, actionRow])
         content.orientation = .vertical
         content.alignment = .width
         content.spacing = 10
@@ -296,6 +318,7 @@ final class FacetPanelView: NSView {
             content.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             closeButton.widthAnchor.constraint(equalToConstant: 28),
+            historyDisclosure.widthAnchor.constraint(equalTo: historyControls.widthAnchor),
             transcriptScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 140),
             promptField.heightAnchor.constraint(equalToConstant: 28)
         ])
@@ -332,6 +355,7 @@ final class FacetPanelView: NSView {
         let configuration = currentConfiguration()
         UserDefaults.standard.set(configuration.modelID, forKey: PreferenceKeys.model)
         UserDefaults.standard.set(configuration.reasoningEffortValue ?? "", forKey: PreferenceKeys.reasoningEffort)
+        delegate?.facetPanelSettingsDidChange(self)
     }
 
     @objc private func stopPressed(_ sender: Any?) {
@@ -340,6 +364,10 @@ final class FacetPanelView: NSView {
 
     @objc private func closePressed(_ sender: Any?) {
         delegate?.facetPanelDidRequestClose(self)
+    }
+
+    @objc private func clearHistoryPressed(_ sender: Any?) {
+        delegate?.facetPanelDidRequestClearHistory(self)
     }
 
     private func submitPrompt() {
@@ -390,6 +418,7 @@ final class FacetPanelView: NSView {
         try apiKeyStore.save(apiKeyField.stringValue)
         apiKeyField.stringValue = ""
         updateAPIKeyStatus()
+        delegate?.facetPanelSettingsDidChange(self)
     }
 
     @objc private func removeKeyPressed(_ sender: Any?) {
@@ -397,6 +426,7 @@ final class FacetPanelView: NSView {
             try apiKeyStore.delete()
             apiKeyField.stringValue = ""
             updateAPIKeyStatus()
+            delegate?.facetPanelSettingsDidChange(self)
         } catch {
             appendSystemMessage(error.localizedDescription)
         }
@@ -416,7 +446,7 @@ final class FacetPanelView: NSView {
         return value.isEmpty ? nil : value
     }
 
-    private func resolvedAPIKey() throws -> String? {
+    func resolvedAPIKey() throws -> String? {
         try apiKeyStore.load() ?? environmentAPIKey
     }
 
@@ -446,7 +476,14 @@ final class FacetPanelView: NSView {
         popup.toolTip = description
     }
 
-    private func currentConfiguration() -> FacetConfiguration {
+    static func savedConfiguration(defaults: UserDefaults = .standard) -> FacetConfiguration {
+        FacetConfiguration(
+            model: defaults.string(forKey: PreferenceKeys.model),
+            reasoningEffort: defaults.string(forKey: PreferenceKeys.reasoningEffort)
+        )
+    }
+
+    func currentConfiguration() -> FacetConfiguration {
         FacetConfiguration(
             model: currentModelSlug(),
             reasoningEffort: selectedValue(in: reasoningPopup)

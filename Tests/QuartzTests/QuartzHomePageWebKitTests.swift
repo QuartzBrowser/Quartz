@@ -88,6 +88,21 @@ final class QuartzHomePageWebKitTests: XCTestCase, WKNavigationDelegate {
         return capturedAction
     }
 
+    @discardableResult
+    private func updateSparks(
+        _ sparks: [[String: String]],
+        status: String,
+        in webView: WKWebView
+    ) async throws -> Bool {
+        let result = try await webView.callAsyncJavaScript(
+            QuartzStartPage.updateCuriositySparksScript,
+            arguments: ["sparks": sparks, "status": status],
+            in: nil,
+            contentWorld: .page
+        )
+        return try XCTUnwrap(result as? Bool)
+    }
+
     func testHomeLoadsWithWorkingMoodAndCuriosityControls() async throws {
         let (window, webView) = makeWebView()
         defer { window.close() }
@@ -142,6 +157,111 @@ final class QuartzHomePageWebKitTests: XCTestCase, WKNavigationDelegate {
         let extensions = try await nativeAction(from: "document.querySelector('a[href=\"quartz-action://extensions\"]').click(); return true;", in: webView)
         XCTAssertEqual(extensions, .showExtensions)
         XCTAssertEqual(webView.url, QuartzStartPage.url)
+    }
+
+    func testGeneratedSparksRenderAsTextAndUseOnlyTheSearchAction() async throws {
+        let (window, webView) = makeWebView()
+        defer { window.close() }
+        await loadHome(in: webView)
+        let hostileTitle = #"<img src=x onerror="document.body.dataset.sparkInjected='yes'">"#
+        let hostileCategory = "</span><script>window.sparkInjected = true</script>"
+        let hostileStatus = "<svg onload=alert(1)>Personalized today</svg>"
+        let query = "javascript:alert('hello') & fox+owl / 雪 #1 50%"
+        let updated = try await updateSparks([
+            ["title": hostileTitle, "query": query, "category": hostileCategory]
+        ], status: hostileStatus, in: webView)
+        XCTAssertTrue(updated)
+        let displayed: [String] = try await evaluate("""
+        ['spark-title', 'spark-category', 'spark-status'].map(id => document.getElementById(id).textContent)
+        """, in: webView)
+        XCTAssertEqual(displayed, [hostileTitle, hostileCategory, hostileStatus])
+        let childCounts: [Int] = try await evaluate("""
+        ['spark-title', 'spark-category', 'spark-status'].map(id => document.getElementById(id).childElementCount)
+        """, in: webView)
+        XCTAssertEqual(childCounts, [0, 0, 0], "Generated content must never be parsed as HTML")
+        let action = try await nativeAction(from: "document.getElementById('spark-link').click(); return true;", in: webView)
+        XCTAssertEqual(action, .searchSpark(query), "Even a URL-like model query must be sent only to search")
+        XCTAssertEqual(webView.url, QuartzStartPage.url)
+        let shuffleDisabled: Bool = try await evaluate("document.getElementById('shuffle-spark').disabled", in: webView)
+        XCTAssertTrue(shuffleDisabled)
+    }
+
+    func testGeneratedSparksShufflePreserveSelectionOnRefreshAndReturnToFallback() async throws {
+        let (window, webView) = makeWebView()
+        defer { window.close() }
+        await loadHome(in: webView)
+        let sparks = [
+            ["title": "Build a pocket observatory.", "query": "DIY portable telescope", "category": "YOUR NIGHT SKY"],
+            ["title": "Turn a hike into a field journal.", "query": "nature field journal techniques", "category": "YOUR NEXT WALK"],
+            ["title": "Sketch with an algorithm.", "query": "creative coding generative line art", "category": "YOUR CREATIVE SIDE"]
+        ]
+        try await updateSparks(sparks, status: "Personalized today by Facet.", in: webView)
+        let initialTitle: String = try await evaluate("document.getElementById('spark-title').textContent", in: webView)
+        XCTAssertEqual(initialTitle, sparks[0]["title"])
+        let shuffled: [String] = try await evaluate("""
+        (() => {
+            document.getElementById('shuffle-spark').click();
+            return [document.getElementById('spark-title').textContent, document.getElementById('spark-link').href];
+        })()
+        """, in: webView)
+        XCTAssertNotEqual(shuffled[0], initialTitle)
+        let selected = try XCTUnwrap(sparks.first { $0["title"] == shuffled[0] })
+        XCTAssertEqual(QuartzStartPage.action(for: try XCTUnwrap(URL(string: shuffled[1]))), .searchSpark(selected["query"]!))
+
+        try await updateSparks(sparks, status: "Refreshing your daily sparks…", in: webView)
+        let refreshed: [String] = try await evaluate("""
+        [document.getElementById('spark-title').textContent, document.getElementById('spark-status').textContent]
+        """, in: webView)
+        XCTAssertEqual(refreshed, [shuffled[0], "Refreshing your daily sparks…"])
+
+        try await updateSparks([
+            ["title": "Tomorrow's new idea.", "query": "fresh curiosity", "category": "NEW DAY"]
+        ], status: "Personalized today by Facet.", in: webView)
+        let replacement: String = try await evaluate("document.getElementById('spark-title').textContent", in: webView)
+        XCTAssertEqual(replacement, "Tomorrow's new idea.")
+
+        try await updateSparks([], status: "Chat with Facet to personalize your daily sparks.", in: webView)
+        let fallback: [String] = try await evaluate("""
+        [document.getElementById('spark-title').textContent, document.getElementById('spark-link').href]
+        """, in: webView)
+        guard case .navigate(let query) = QuartzStartPage.action(for: try XCTUnwrap(URL(string: fallback[1]))) else {
+            return XCTFail("Clearing generated sparks must restore the offline fallback")
+        }
+        XCTAssertFalse(query.isEmpty)
+        let nextFallback: String = try await evaluate("""
+        (() => {
+            document.getElementById('shuffle-spark').click();
+            return document.getElementById('spark-title').textContent;
+        })()
+        """, in: webView)
+        XCTAssertNotEqual(nextFallback, fallback[0])
+    }
+
+    func testSparkUpdatesDoNotRunAfterNavigatingAwayFromHome() async throws {
+        let (window, webView) = makeWebView()
+        defer { window.close() }
+        await loadHome(in: webView)
+        let loaded = expectation(description: "Leave the Quartz home document")
+        navigationFinished = loaded
+        webView.loadHTMLString("<!doctype html><title>Other page</title><body></body>", baseURL: URL(string: "https://example.org"))
+        await fulfillment(of: [loaded], timeout: 15)
+        navigationFinished = nil
+        XCTAssertFalse(QuartzStartPage.isStartPageURL(webView.url))
+        let installed: Bool = try await evaluate("""
+        (() => {
+            window.quartzUpdateCuriositySparks = () => { document.body.dataset.sparkUpdated = 'yes'; };
+            String.prototype.toLowerCase = () => 'quartz:';
+            Array.prototype.includes = () => true;
+            return true;
+        })()
+        """, in: webView)
+        XCTAssertTrue(installed)
+        let updated = try await updateSparks([
+            ["title": "A private interest", "query": "a private search", "category": "FOR YOU"]
+        ], status: "Personalized today.", in: webView)
+        XCTAssertFalse(updated)
+        let invoked: Bool = try await evaluate("document.body.dataset.sparkUpdated === 'yes'", in: webView)
+        XCTAssertFalse(invoked, "A late generation result must not call into another website, even when it overrides built-ins")
     }
 
     func testContentSecurityPolicyRejectsUntrustedInlineScripts() async throws {

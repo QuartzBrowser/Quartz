@@ -4,6 +4,7 @@ import Foundation
 
 enum QuartzStartPageAction: Equatable {
     case navigate(String)
+    case searchSpark(String)
     case showFacet
     case showExtensions
 }
@@ -35,7 +36,7 @@ enum QuartzStartPage {
         }
 
         switch url.host?.lowercased() {
-        case "navigate":
+        case "navigate", "spark-search":
             var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
             // GET forms encode spaces as +; an actual plus sign remains %2B.
             let encodedQuery = components?.percentEncodedQuery?
@@ -44,7 +45,7 @@ enum QuartzStartPage {
             let query = components?.queryItems?
                 .first(where: { $0.name == "query" })?
                 .value ?? ""
-            return .navigate(query)
+            return url.host?.lowercased() == "spark-search" ? .searchSpark(query) : .navigate(query)
         case "facet":
             return .showFacet
         case "extensions":
@@ -74,6 +75,21 @@ enum QuartzStartPage {
         return "default-src 'none'; script-src 'sha256-\(hash)'; style-src 'unsafe-inline'; form-action quartz-action:; base-uri 'none'; frame-ancestors 'none'"
     }()
 
+    // Pass model output as callAsyncJavaScript arguments, never as JavaScript source.
+    // Recheck the document because a tab may navigate while generation is in flight.
+    // The protocol gate must not call functions a remote website could override.
+    static let updateCuriositySparksScript = #"""
+    if (window.top !== window || location.protocol !== 'quartz:') return false;
+    const pageURL = new URL(location.href);
+    if (!['home', 'start'].includes(pageURL.hostname.toLowerCase())
+        || pageURL.username || pageURL.password || pageURL.port
+        || !['', '/'].includes(pageURL.pathname)
+        || pageURL.href.split('#')[0].includes('?')
+        || typeof window.quartzUpdateCuriositySparks !== 'function') return false;
+    window.quartzUpdateCuriositySparks(sparks, status);
+    return true;
+    """#
+
     static let script = #"""
 (() => {
   'use strict';
@@ -100,7 +116,7 @@ enum QuartzStartPage {
   updateGreeting();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) updateGreeting(); });
 
-  const sparks = [
+  const fallbackSparks = [
     ['A universe hiding in a drop of water.', 'microscopic life in a drop of pond water', 'SMALL WORLDS'],
     ['What does the universe sound like?', 'NASA sounds of space sonification', 'SPACE & WONDER'],
     ['Buildings straight out of a daydream.', 'surreal architecture around the world', 'ART & IDEAS'],
@@ -115,15 +131,33 @@ enum QuartzStartPage {
     ['Discover an instrument you’ve never heard.', 'unusual musical instruments and their sounds', 'A DIFFERENT NOTE']
   ];
   const now = new Date();
+  let sparks = fallbackSparks;
+  let generatedSparksKey = '[]';
   let sparkIndex = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000) % sparks.length;
   function showSpark() {
     const [title, query, category] = sparks[sparkIndex];
     document.getElementById('spark-title').textContent = title;
     document.getElementById('spark-category').textContent = category;
-    document.getElementById('spark-link').href = 'quartz-action://navigate?query=' + encodeURIComponent(query);
+    const action = sparks === fallbackSparks ? 'navigate' : 'spark-search';
+    document.getElementById('spark-link').href = 'quartz-action://' + action + '?query=' + encodeURIComponent(query);
+    document.getElementById('shuffle-spark').disabled = sparks.length < 2;
   }
+  window.quartzUpdateCuriositySparks = (items, status) => {
+    const generated = Array.isArray(items) ? items
+      .filter(item => item && ['title', 'query', 'category'].every(key => typeof item[key] === 'string' && item[key].trim()))
+      .map(item => [item.title, item.query, item.category]) : [];
+    const key = JSON.stringify(generated);
+    if (key !== generatedSparksKey) {
+      generatedSparksKey = key;
+      sparks = generated.length ? generated : fallbackSparks;
+      sparkIndex = 0;
+      showSpark();
+    }
+    document.getElementById('spark-status').textContent = typeof status === 'string' ? status : '';
+  };
   showSpark();
   document.getElementById('shuffle-spark').addEventListener('click', () => {
+    if (sparks.length < 2) return;
     sparkIndex = (sparkIndex + 1 + Math.floor(Math.random() * (sparks.length - 1))) % sparks.length;
     showSpark();
   });
@@ -254,11 +288,12 @@ enum QuartzStartPage {
     #shuffle-spark { display: inline-flex; gap: 5px; align-items: center; padding: 6px 9px; border: 1px solid color-mix(in srgb, var(--spark-ink) 23%, transparent); border-radius: 20px; color: inherit; background: transparent; font-size: 10px; }
     #shuffle-spark:hover { background: #ffffff45; }
     #shuffle-spark svg { width: 12px; height: 12px; }
-    #spark-title { position: relative; z-index: 1; max-width: 365px; margin: 13px 0 16px; font-size: 25px; font-weight: 650; letter-spacing: -.8px; line-height: 1.2; }
+    #spark-title { position: relative; z-index: 1; max-width: 365px; margin: 13px 0 16px; font-size: 25px; font-weight: 650; letter-spacing: -.8px; line-height: 1.2; overflow-wrap: anywhere; }
     .spark-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; align-self: stretch; margin-top: auto; z-index: 1; }
     #spark-link { font-size: 12px; font-weight: 700; text-decoration: none; padding: 4px 0; }
     #spark-link:hover { text-decoration: underline; }
-    #spark-category { font-size: 8px; font-weight: 650; letter-spacing: .09em; text-align: right; }
+    #spark-category { font-size: 8px; font-weight: 650; letter-spacing: .09em; text-align: right; overflow-wrap: anywhere; }
+    #spark-status { position: relative; z-index: 1; margin: 12px 0 0; font-size: 10px; line-height: 1.5; opacity: .8; overflow-wrap: anywhere; }
     .tools { display: grid; grid-template-rows: 1fr 1fr; gap: 12px; }
     .tool { display: flex; align-items: center; gap: 15px; padding: 19px 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); text-decoration: none; transition: border-color .18s; }
     .tool:hover { border-color: var(--accent); }
@@ -352,6 +387,7 @@ enum QuartzStartPage {
           <div class="spark-top"><span class="spark-label">✳ &nbsp; CURIOSITY SPARK</span><button id="shuffle-spark" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M1 4h2c4 0 6 8 10 8h2M12 9l3 3-3 3M1 12h2c1.5 0 2.8-1.2 4-3M9 6c1.3-1.3 2.5-2 4-2h2m-3-3 3 3-3 3"/></svg>Shuffle</button></div>
           <h2 id="spark-title" aria-live="polite" aria-atomic="true">What does the universe sound like?</h2>
           <div class="spark-bottom"><a id="spark-link" href="quartz-action://navigate?query=NASA%20sounds%20of%20space%20sonification">Explore this <span aria-hidden="true">↗</span></a><span id="spark-category">SPACE &amp; WONDER</span></div>
+          <p id="spark-status" role="status" aria-live="polite">Chat with Facet to personalize your daily sparks.</p>
         </article>
         <div class="tools">
           <a class="tool" href="quartz-action://facet" aria-label="Open Facet"><span class="tool-icon" aria-hidden="true">✦</span><div class="tool-copy"><h2>A sidekick for your rabbit holes</h2><p>Open Facet. Bring a question, leave with an idea.</p></div><span class="tool-arrow" aria-hidden="true">↗</span></a>

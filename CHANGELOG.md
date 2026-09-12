@@ -1,3 +1,10 @@
+## [0.14.1](https://github.com/QuartzBrowser/Quartz/compare/v0.14.0...v0.14.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* wait for published release feed propagation ([e2305af](https://github.com/QuartzBrowser/Quartz/commit/e2305afb56c467d5ceed61c8939a8aeb0720dd53))
+
 # [0.14.0](https://github.com/QuartzBrowser/Quartz/compare/v0.13.1...v0.14.0) (2026-09-12)
 
 

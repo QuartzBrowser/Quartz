@@ -1,34 +1,62 @@
 name: release
 
 on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: '2-59/5 * * * *'
   workflow_dispatch:
     inputs:
+      engine_revision:
+        description: "Optional full WebKit commit SHA already promoted to fork main. Leave empty to keep the pinned engine."
+        required: false
+        default: ""
+        type: string
       verify_version:
-        description: "Recheck an existing release without publishing (for example, 0.14.0). Leave empty for a normal release."
+        description: "Recheck an existing release without publishing (for example, 1.0.1). Cannot be combined with engine_revision."
         required: false
         default: ""
         type: string
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: quartz-release
   cancel-in-progress: false
-  # A scheduled no-op must not replace a queued Quartz push release.
+  # Keep deliberate requests serialized; never cancel a publication in progress.
   queue: max
 
 jobs:
+  validate-request:
+    name: Validate the manual release request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main and unambiguous inputs
+        id: validate-inputs
+        shell: bash
+        env:
+          QUARTZ_ENGINE_REVISION: ${{ inputs.engine_revision }}
+          QUARTZ_VERIFY_VERSION: ${{ inputs.verify_version }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "error: run this workflow manually from Quartz main" >&2
+            exit 1
+          fi
+          if [[ -n "$QUARTZ_ENGINE_REVISION" && -n "$QUARTZ_VERIFY_VERSION" ]]; then
+            echo "error: choose engine publication or existing-release verification, not both" >&2
+            exit 1
+          fi
+          if [[ -n "$QUARTZ_ENGINE_REVISION" && ! "$QUARTZ_ENGINE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "error: engine_revision must be a complete lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          if [[ -n "$QUARTZ_VERIFY_VERSION" && ! "$QUARTZ_VERIFY_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "error: verify_version must be a numeric major.minor.patch version without v" >&2
+            exit 1
+          fi
+
   engine-update:
-    name: Check WebKit main
-    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.verify_version == '')
+    name: Plan the selected engine release
+    needs: validate-request
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_version == ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -39,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -52,12 +80,22 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 Scripts/update-webkit.py plan
+          QUARTZ_ENGINE_REVISION: ${{ inputs.engine_revision }}
+        run: |
+          QUARTZ_PLAN_ARGS=()
+          if [[ -n "$QUARTZ_ENGINE_REVISION" ]]; then
+            QUARTZ_PLAN_ARGS+=(--revision "$QUARTZ_ENGINE_REVISION")
+          fi
+          python3 Scripts/update-webkit.py plan "${QUARTZ_PLAN_ARGS[@]}"
 
   release:
     needs: engine-update
-    if: github.ref == 'refs/heads/main' && (github.event_name != 'schedule' || needs.engine-update.outputs.release_required == 'true')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_version == ''
     name: Release with Quartz WebKit
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     runs-on: ${{ vars.QUARTZ_WEBKIT_RUNNER || 'blacksmith-6vcpu-macos-26' }}
     timeout-minutes: 360
     env:
@@ -65,8 +103,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Prepare the dispatch snapshot on a local release branch
+        id: prepare-release-branch
+        env:
+          QUARTZ_RELEASE_BASE: ${{ github.sha }}
+        run: git switch --force-create main "$QUARTZ_RELEASE_BASE"
 
       - name: Stage the engine candidate for validation
         env:
@@ -111,7 +155,7 @@ jobs:
       - name: Require publication of a pending engine update
         if: needs.engine-update.outputs.release_required == 'true' && steps.release.outputs.new_release_published != 'true'
         run: |
-          echo "error: the validated engine has not been published; a later check will retry" >&2
+          echo "error: the validated engine has not been published; inspect the failure and manually rerun release" >&2
           exit 1
 
       - name: Verify public release downloads
@@ -122,7 +166,8 @@ jobs:
 
   verify-published-release:
     name: Verify existing public release
-    if: github.event_name == 'workflow_dispatch' && inputs.verify_version != ''
+    needs: validate-request
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_version != ''
     runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 20
     permissions:
@@ -132,6 +177,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Test latest-feed propagation handling

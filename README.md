@@ -68,11 +68,24 @@ The default package is ad-hoc signed for local development. If macOS blocks a do
 xattr -dr com.apple.quarantine /path/to/Quartz.app
 ```
 
-The automated release workflow uses free Ed25519 update signing without an Apple
+The manually requested release workflow uses free Ed25519 update signing without an Apple
 Developer account; see [update setup](docs/UPDATES.md). The
 [release checklist](docs/releases.md) covers universal app and ZIP verification,
 local ad-hoc testing, and the separate Developer ID signing and notarization
 process, including rebuilding the ZIP after stapling.
+
+## Maintaining the engine and publishing
+
+Engine customizations and upstream updates accumulate on the WebKit fork's
+`quartz-dev` branch. Test an exact engine SHA with Quartz, promote the tested
+batch to fork `main`, then explicitly run Quartz's `release` workflow to ship it.
+Neither ordinary commits nor pushes publish a release; Quartz PR/main CI remains
+automatic. A release with no engine input keeps the currently pinned engine.
+
+The [WebKit maintenance manual](docs/WEBKIT_MAINTENANCE.md) covers development
+branches, upstream merges, customization records, candidate testing, promotion,
+manual publication, rollback, retries, caches, and checklists with copyable
+commands.
 
 ## Features
 

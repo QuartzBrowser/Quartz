@@ -209,38 +209,49 @@ exercise the stapled ticket. Do not remove quarantine for this verification.
 
 ## Automated release boundary
 
-Conventional Commits merged into Quartz's `main` and updates to
-[`QuartzBrowser/WebKit`'s `main`](https://github.com/QuartzBrowser/WebKit/tree/main)
-drive [the release workflow](../.github/workflows/release.yml) and
-`release.config.cjs`. A lightweight scheduled check runs every five minutes;
-normal Quartz releases also check for a newer engine. Only descendants of the
-committed [`WebKit.lock.json`](../WebKit.lock.json) revision are eligible.
-Feature-branch pushes do not publish engine updates.
+Releases are explicitly requested through **Quartz > Actions > release > Run
+workflow**, selecting branch **main**. [The release workflow](../.github/workflows/release.yml)
+has no push or scheduled trigger. Ordinary Quartz `main` pushes and pull requests
+still run the [build workflow](../.github/workflows/build.yml) without publication.
+Conventional Commits accumulated on Quartz `main` determine the next version via
+`release.config.cjs` once a maintainer requests a release.
 
-The serialized release job selects Xcode 26.6 on the configured macOS 26 runner,
-restores verified products from an exact engine/toolchain cache key or builds the
-candidate fork, and runs the existing tests, universal packaging, rendering/network,
-and updater checks. It commits a validated engine pin with a `fix(webkit)`
-Conventional Commit only after those gates pass. It then runs semantic-release
-in the same job, prepares a universal ad-hoc app with the engine embedded, signs
-the frozen ZIP and appcast with the existing Sparkle key, publishes them with
+Leave `engine_revision` empty to preserve the committed
+[`WebKit.lock.json`](../WebKit.lock.json) pin. To ship an engine batch, supply its
+exact full lowercase SHA: it must descend from the current pin and be reachable
+from [`QuartzBrowser/WebKit`'s `main`](https://github.com/QuartzBrowser/WebKit/tree/main).
+The workflow does not automatically select that branch's latest commit. Develop
+and integrate engine changes on `quartz-dev`, test a candidate through Quartz's
+manual `build` input, and promote the tested SHA to fork `main` before selecting
+it for release. See the [maintenance manual](WEBKIT_MAINTENANCE.md) for the complete
+procedure and copyable commands.
+
+The serialized release job snapshots Quartz's application revision at dispatch,
+selects Xcode 26.6 on the configured macOS 26 runner, restores verified products
+from an exact engine/toolchain cache key or builds the candidate fork, and runs
+the tests, packaging/runtime, and updater checks. It commits a validated engine
+pin with a `fix(webkit)` Conventional Commit after the pre-commit gates pass and
+only if Quartz main still matches the plan. It then runs semantic-release in the
+same job, prepares a universal ad-hoc app with the engine embedded, signs the
+frozen ZIP and appcast with the existing Sparkle key, publishes them with
 `SHA256SUMS`, and verifies fresh public downloads. Engine-only updates cause patch
-releases; pending Quartz changes can raise the version further.
+releases; pending Quartz changes can raise the version further. A manual request
+with no releasable changes can complete without a new version.
 
-A candidate engine build or validation failure leaves the committed pin and published
-release unchanged. A publication failure after the pin commit is retried by a
-later check while the latest published release lacks that engine revision; an
-empty `fix(webkit)` commit can make the retry releasable. Multiple engine pushes
-can be included in one release. GitHub schedules can be delayed or disabled after
-60 days of inactivity in a public repository, so check **Actions > release** if
-updates stop. **Run workflow** with `verify_version` empty invokes the same path
-manually.
+A pre-commit candidate build or validation failure leaves the committed pin
+unchanged. A failure later in the publication sequence may leave a committed pin,
+tag, draft, or published release; inspect the failed step and actual repository
+state before retrying. A new manual release can add an empty `fix(webkit)` commit
+when the latest published release still lacks the committed engine revision.
+There is no scheduled retry. If Quartz main moved during validation, dispatch a
+fresh run against the reviewed new application tree. If publication succeeded
+but the public-download audit failed, use `verify_version` as described below.
 
-No new cross-repository credential is required: the detector reads the public
-fork and publishing uses Quartz's existing `GITHUB_TOKEN` and Sparkle key. The
-engine commit and publication share one workflow because the token's pushes do
-not trigger a second workflow. See [automatic engine updates](WEBKIT.md#automatic-engine-updates)
-for the branch and retry behavior.
+The workflow reads the public fork and publishing uses Quartz's existing
+`GITHUB_TOKEN` and Sparkle key; no new cross-repository credential is required.
+Engine selection and publication run in the same workflow. See
+[release planning and recovery](WEBKIT_MAINTENANCE.md#release-planning-and-failure-recovery)
+for the exact selection, mutation, and failure boundaries.
 
 System-WebKit development mode is rejected by normal release preparation. The
 updater test script's `QUARTZ_TEST_SYSTEM_RELEASE=1` exception is only for
@@ -263,7 +274,8 @@ Run workflow** and set `verify_version` to the published version (for example,
 through the GitHub API, downloads them again through the public URLs, and checks
 checksums, the latest-feed route, application signatures, version, and update
 archive signature. It does not rebuild, replace, or publish release assets.
-The requested version must still be the latest release. Leave `verify_version`
+The requested version must still be the latest release. Leave `engine_revision`
+empty for this recheck; supplying both inputs is rejected. Leave `verify_version`
 empty for a normal release run. Simply rerunning the original release job can
 skip public verification when semantic-release finds no new version to publish.
 

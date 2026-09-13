@@ -115,10 +115,18 @@ In the pull request description, include:
 
 ## Releases
 
-Quartz uses semantic-release to publish versions directly from commits merged
-into `main`. The release workflow analyzes commit titles, updates
+Quartz uses semantic-release when a maintainer explicitly runs **Actions > release >
+Run workflow** on `main`. Commits and merges accumulate until that action; they
+do not automatically publish. The workflow analyzes commit titles, updates
 `CHANGELOG.md` and `version.txt`, builds the macOS archive, tags the release,
-and publishes the GitHub release without a release pull request.
+and publishes the GitHub release without a release pull request. Normal PR and
+`main` builds still run automatically.
+
+Leave the release's `engine_revision` input empty to retain the committed engine
+pin, or supply an exact promoted fork SHA for an engine update. Develop engine
+features and upstream syncs through fork `quartz-dev`; the
+[maintenance manual](docs/WEBKIT_MAINTENANCE.md) covers its branch model, candidate
+tests, upstream merge rules, deliberate promotion, publication, and recovery.
 
 Use Conventional Commit titles for squash merges so semantic-release can classify
 changes:

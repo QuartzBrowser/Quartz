@@ -1,10 +1,9 @@
 # Quartz WebKit
 
 Quartz builds against the [QuartzBrowser/WebKit fork](https://github.com/QuartzBrowser/WebKit).
-[`WebKit.lock.json`](../WebKit.lock.json) selects the exact source revision,
-currently `7f1d29889cbd13cb4627b31f4db73651bbcf12e0`. Default builds require
-prepared products from that revision. Missing or stale engine metadata fails the
-build with setup instructions.
+[`WebKit.lock.json`](../WebKit.lock.json) selects the exact source revision.
+Default builds require prepared products from that revision. Missing or stale
+engine metadata fails the build with setup instructions.
 
 ## Build the engine
 
@@ -173,12 +172,52 @@ the installed macOS WebKit. Normal release preparation refuses this mode.
 `QUARTZ_TEST_SYSTEM_RELEASE=1` is reserved for disposable updater fixtures and
 does not establish fork or release compatibility.
 
-## Updating the fork and CI cache
+## Automatic engine updates
 
-Change the complete revision in `WebKit.lock.json`, then build from a clean
-checkout of that exact revision. To retain an existing checkout and its build,
-select new source, raw build, and products directories with the variables above.
-Do not relabel existing products by editing `QuartzWebKit.json`.
+Push or merge engine updates into
+[`QuartzBrowser/WebKit`'s `main` branch](https://github.com/QuartzBrowser/WebKit/tree/main)
+to ship them through Quartz's existing updater. Quartz's
+[`release` workflow](../.github/workflows/release.yml) checks that branch every
+five minutes and during normal Quartz releases. Feature branches do not trigger
+engine releases. The detector accepts only revisions that descend from the
+current `WebKit.lock.json` pin; a rewritten or unrelated history fails the check.
+
+Before changing the committed pin, the release job builds the candidate engine
+for Apple Silicon and Intel, runs Quartz's tests and packaged rendering/network
+checks, and validates the updater pipeline. Once those checks pass, it commits
+the pin with a `fix(webkit)` Conventional Commit and runs semantic-release in the
+same workflow. Engine-only changes produce a Quartz patch release; other pending
+Quartz changes can require a minor or major version. Users receive the bundled
+engine with that Quartz update.
+
+The release workflow is serialized, so overlapping checks cannot publish
+competing updates. Pending checks queue without replacing Quartz push releases;
+each checks the latest main branches after the previous run finishes. Several
+engine pushes may be collected into one release. A failed candidate build or
+validation leaves the committed pin and published release unchanged. If
+publication fails after the validated pin is committed, a later check retries
+that engine; it can add an empty `fix(webkit)` commit when the latest published
+release still lacks that revision.
+
+GitHub may delay scheduled runs and disables scheduled workflows in public
+repositories after 60 days without repository activity. The five-minute schedule
+is a check interval, not a delivery guarantee; an uncached engine build also takes
+time. **Actions > release > Run workflow**, with `verify_version` left empty,
+runs the same update and release path manually. The workflow uses the repository's
+existing `GITHUB_TOKEN` and Sparkle signing configuration; no cross-repository
+access token or WebKit workflow is needed. It publishes within the same run
+because a push made with `GITHUB_TOKEN` does not start another push workflow.
+See GitHub's [schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
+and [concurrency queue](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
+documentation for platform limits, including the maximum of 100 pending runs.
+
+For a local engine experiment, change the complete revision in
+`WebKit.lock.json`, then build from a clean checkout of that exact revision. To
+retain an existing checkout and its build, select new source, raw build, and
+products directories with the variables above. Do not relabel existing products
+by editing `QuartzWebKit.json`.
+
+## CI cache
 
 The shared GitHub composite action caches only verified prepared products. Its
 exact key includes the lock, build and bundling scripts, action definition,
@@ -199,10 +238,14 @@ a cache hit avoids that compilation but always revalidates the prepared products
 
 ## Upstream implementation references
 
-- [Build requirements and application launch helpers](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Tools/Scripts/webkitdirs.pm): Xcode minimum and the upstream development `DYLD_*` launch path.
-- [SDK and deployment selection](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Configurations/SDKVariant.xcconfig): public Release builds and the Apple-internal Production configuration.
-- [Upstream builder configuration](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Tools/CISupport/build-webkit-org/config.json) and [supported downlevel versions](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Configurations/Makefile): the macOS 15.4 deployment target.
-- [Release configuration](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Source/WebKit/Configurations/DebugRelease.xcconfig) and [relocatable service paths](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Source/WebKit/Configurations/RelocatableFrameworksLinkerFlags.xcconfig): service layout and loader paths.
-- [WebKit project](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Source/WebKit/WebKit.xcodeproj/project.pbxproj): framework-to-XPC and library symlinks.
-- [Service entitlement generation](https://github.com/QuartzBrowser/WebKit/blob/7f1d29889cbd13cb4627b31f4db73651bbcf12e0/Source/WebKit/Scripts/process-entitlements.sh): JIT and per-service signing requirements.
+These links follow the engine development branch. Use the revision in
+[`WebKit.lock.json`](../WebKit.lock.json) to inspect the exact source selected by
+Quartz.
+
+- [Build requirements and application launch helpers](https://github.com/QuartzBrowser/WebKit/blob/main/Tools/Scripts/webkitdirs.pm): Xcode minimum and the upstream development `DYLD_*` launch path.
+- [SDK and deployment selection](https://github.com/QuartzBrowser/WebKit/blob/main/Configurations/SDKVariant.xcconfig): public Release builds and the Apple-internal Production configuration.
+- [Upstream builder configuration](https://github.com/QuartzBrowser/WebKit/blob/main/Tools/CISupport/build-webkit-org/config.json) and [supported downlevel versions](https://github.com/QuartzBrowser/WebKit/blob/main/Configurations/Makefile): the macOS 15.4 deployment target.
+- [Release configuration](https://github.com/QuartzBrowser/WebKit/blob/main/Source/WebKit/Configurations/DebugRelease.xcconfig) and [relocatable service paths](https://github.com/QuartzBrowser/WebKit/blob/main/Source/WebKit/Configurations/RelocatableFrameworksLinkerFlags.xcconfig): service layout and loader paths.
+- [WebKit project](https://github.com/QuartzBrowser/WebKit/blob/main/Source/WebKit/WebKit.xcodeproj/project.pbxproj): framework-to-XPC and library symlinks.
+- [Service entitlement generation](https://github.com/QuartzBrowser/WebKit/blob/main/Source/WebKit/Scripts/process-entitlements.sh): JIT and per-service signing requirements.
 - [GitHub macOS 26 runner image](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md): currently available Xcode installations and SDKs.

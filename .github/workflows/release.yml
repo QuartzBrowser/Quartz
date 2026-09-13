@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: '2-59/5 * * * *'
   workflow_dispatch:
     inputs:
       verify_version:
@@ -20,10 +22,39 @@ permissions:
 concurrency:
   group: quartz-release
   cancel-in-progress: false
+  # A scheduled no-op must not replace a queued Quartz push release.
+  queue: max
 
 jobs:
+  engine-update:
+    name: Check WebKit main
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.verify_version == '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      release_required: ${{ steps.plan.outputs.release_required }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test engine update planning and commits
+        run: python3 Scripts/test-engine-updates.py
+
+      - name: Plan an engine update
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 Scripts/update-webkit.py plan
+
   release:
-    if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
+    needs: engine-update
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'schedule' || needs.engine-update.outputs.release_required == 'true')
     name: Release with Quartz WebKit
     runs-on: ${{ vars.QUARTZ_WEBKIT_RUNNER || 'blacksmith-6vcpu-macos-26' }}
     timeout-minutes: 360
@@ -32,7 +63,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+
+      - name: Stage the engine candidate for validation
+        env:
+          QUARTZ_ENGINE_PLAN: ${{ needs.engine-update.outputs.plan }}
+        run: |
+          mkdir -p .build
+          printf '%s\n' "$QUARTZ_ENGINE_PLAN" > .build/engine-update-plan.json
+          python3 Scripts/update-webkit.py stage --plan .build/engine-update-plan.json
 
       - name: Test engine bundle validation
         run: |
@@ -50,6 +90,9 @@ jobs:
           Scripts/quartz.sh test
           Scripts/test-update-packaging.sh
 
+      - name: Commit the validated engine update
+        run: python3 Scripts/update-webkit.py commit --plan .build/engine-update-plan.json
+
       - name: Run semantic-release
         id: release
         uses: cycjimmy/semantic-release-action@v6
@@ -62,6 +105,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+
+      - name: Require publication of a pending engine update
+        if: needs.engine-update.outputs.release_required == 'true' && steps.release.outputs.new_release_published != 'true'
+        run: |
+          echo "error: the validated engine has not been published; a later check will retry" >&2
+          exit 1
 
       - name: Verify public release downloads
         if: steps.release.outputs.new_release_published == 'true'

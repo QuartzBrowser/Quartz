@@ -175,6 +175,9 @@ class WorkflowPolicyTests(unittest.TestCase):
         uploads = [step for step in steps(self.build) if step.get("uses", "").startswith("actions/upload-artifact@")]
         self.assertTrue(uploads)
         for upload in uploads:
+            # A rerun retains its run ID. Replacing this development artifact
+            # avoids failing after a full build because its name already exists.
+            self.assertEqual(upload.get("with", {}).get("overwrite"), "true")
             for event in ("workflow_dispatch", "push", "pull_request"):
                 for engine in ("", REVISION):
                     with self.subTest(event=event, engine=engine):

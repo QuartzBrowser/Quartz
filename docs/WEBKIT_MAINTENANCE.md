@@ -196,11 +196,12 @@ should have a deliberate default and a way to test both configurations.
 
 ### Keep a customization ledger
 
-Maintain a tracked `QUARTZ_PATCHES.md` in the fork as customizations evolve, or an
-equivalent linked record in a dedicated fork documentation directory. The template
-below is a starting format, not a claim that the existing patch inventory has
-already been audited. Add an entry with every customization and update it during
-every upstream sync.
+Maintain the fork's tracked [QUARTZ_PATCHES.md](https://github.com/QuartzBrowser/WebKit/blob/quartz-dev/QUARTZ_PATCHES.md)
+as customizations evolve. Its initial source inventory records the retained
+Writing Tools and Quick Look changes, their exact commits and files, and which
+regression checks still need runtime evidence. The template below is a format
+for future entries. Add an entry with every customization and update it during
+every upstream sync; a source inventory does not prove runtime correctness.
 
 ```markdown
 ## QWK-001: Short behavior name
@@ -385,6 +386,11 @@ engine manifest carries the selected engine's provenance. The upload occurs only
 after validation succeeds and only when the manual `engine_revision` input is
 nonempty. Ordinary PR/main builds and manual builds with no engine input do not
 upload this candidate artifact.
+
+A rerun keeps its run ID and replaces that run's development artifact after
+successful validation. Download evidence you need to retain before rerunning;
+a fresh **Run workflow** request gets a separate run ID and artifact. This
+replacement behavior applies only to candidate artifacts, not published releases.
 
 Download it through the run's **Artifacts** section, or use the exact run ID:
 
@@ -681,6 +687,26 @@ fork `main`, test the fix against the release application tree, and fast-forward
 the integration. The release's forward ancestry checks remain in force.
 
 ## Caches, builds, and evidence
+
+### Test the maintenance tools and workflow rules
+
+These checks exercise engine selection and transaction behavior in disposable
+Git repositories, parse the actual workflow event/permission rules, and execute
+the promotion instructions against temporary remotes. They do not build WebKit,
+contact GitHub, or push a real repository:
+
+```sh
+python3 Scripts/test-engine-updates.py
+python3 -m venv .build/workflow-tests-venv
+.build/workflow-tests-venv/bin/python -m pip install -r Scripts/requirements-workflow-tests.txt
+.build/workflow-tests-venv/bin/python Scripts/test-workflow-policy.py
+```
+
+Installing the pinned PyYAML dependency requires package-registry access unless
+it is already cached. The tests themselves run locally. Normal hosted CI runs
+both suites in its Linux policy job before starting the macOS build. Changes to
+engine selection, publication permissions/triggers, or the documented promotion
+commands should retain these checks and extend them for changed behavior.
 
 ### Separate development source from reproducible builds
 

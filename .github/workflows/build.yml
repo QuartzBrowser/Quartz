@@ -114,4 +114,5 @@ jobs:
             .build/engine-candidate.json
           include-hidden-files: true
           if-no-files-found: error
+          overwrite: true
           retention-days: 7

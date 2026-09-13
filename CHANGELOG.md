@@ -1,3 +1,28 @@
+# [1.0.0](https://github.com/QuartzBrowser/Quartz/compare/v0.16.0...v1.0.0) (2026-09-13)
+
+
+* feat(webkit)!: bundle the pinned Quartz WebKit fork ([6100cbb](https://github.com/QuartzBrowser/Quartz/commit/6100cbb2a1f5916cbaa4f027bbac0cc6bdc969df))
+
+
+### Bug Fixes
+
+* **ci:** isolate launcher cleanup tests from host loader policy ([25e6914](https://github.com/QuartzBrowser/Quartz/commit/25e691458eaf95e6ff756155c02a318629647c96))
+* **ci:** pass WebKit job count through composite action inputs ([dd2269f](https://github.com/QuartzBrowser/Quartz/commit/dd2269f70b662f0e69fde6aea4df2b7f0a32e547))
+* stabilize WebKit toolchain cache identity ([94b7908](https://github.com/QuartzBrowser/Quartz/commit/94b790810fa728745340a1f342954a325e12305d))
+* **webkit:** publish engine 7f1d29889cbd ([70b9767](https://github.com/QuartzBrowser/Quartz/commit/70b9767dc67c9f22afa2badc5e5d775dcca1b4bc))
+
+
+### Features
+
+* automatically release Quartz when WebKit main advances ([3f9e30c](https://github.com/QuartzBrowser/Quartz/commit/3f9e30c87bcec91d6c32b6aee958fa1ffad06e95))
+
+
+### BREAKING CHANGES
+
+* Default Quartz builds require a prepared fork, full Xcode
+26.2 or newer, and macOS 15.4 or newer. Use Scripts/build-webkit.sh to prepare
+the engine and Scripts/quartz.sh for development commands.
+
 # [0.16.0](https://github.com/QuartzBrowser/Quartz/compare/v0.15.0...v0.16.0) (2026-09-12)
 
 

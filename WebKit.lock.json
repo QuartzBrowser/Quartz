@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repository": "https://github.com/QuartzBrowser/WebKit.git",
-  "revision": "7f1d29889cbd13cb4627b31f4db73651bbcf12e0",
+  "revision": "4a523b0b3d1ddf66abbf9ec9b6351248e57db73c",
   "minimumXcode": "26.2",
   "macOSDeploymentTarget": "15.4"
 }

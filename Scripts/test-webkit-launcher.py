@@ -28,6 +28,32 @@ class QuartzLauncherTests(unittest.TestCase):
         run("xcrun", "clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-mmacosx-version-min=15.4",
             ROOT / "Scripts/QuartzLauncher.c", "-o", cls.launcher)
         run("codesign", "--force", "--sign", "-", "--options", "runtime", cls.launcher)
+        # Seed dangerous loader variables after dyld has started, before the real
+        # launcher entry point. A subprocess environment tests the host's AMFI
+        # policy instead: some CI hosts honor DYLD_INSERT_LIBRARIES even for an
+        # ad-hoc hardened executable and abort before our cleanup can run.
+        harness = cls.root / "launcher-harness.c"
+        harness.write_text(r'''
+#include <stdlib.h>
+int quartz_launcher_main(int argc, char **argv);
+int main(int argc, char **argv) {
+    if (setenv("DYLD_FRAMEWORK_PATH", "/invalid/inherited", 1)
+        || setenv("DYLD_LIBRARY_PATH", "/invalid/library", 1)
+        || setenv("DYLD_INSERT_LIBRARIES", "/invalid/injected.dylib", 1)
+        || setenv("DYLD_PRINT_LIBRARIES", "1", 1)
+        || setenv("__XPC_DYLD_FRAMEWORK_PATH", "/invalid/xpc", 1)
+        || setenv("__XPC_DYLD_INSERT_LIBRARIES", "/invalid/xpc.dylib", 1))
+        return 99;
+    return quartz_launcher_main(argc, argv);
+}
+''')
+        launcher_object = cls.root / "launcher.o"
+        run("xcrun", "clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-mmacosx-version-min=15.4",
+            "-Dmain=quartz_launcher_main", "-c", ROOT / "Scripts/QuartzLauncher.c", "-o", launcher_object)
+        cls.seeded_launcher = cls.root / "seeded-launcher"
+        run("xcrun", "clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-mmacosx-version-min=15.4",
+            harness, launcher_object, "-o", cls.seeded_launcher)
+        run("codesign", "--force", "--sign", "-", "--options", "runtime", cls.seeded_launcher)
         source = cls.root / "runtime.c"
         source.write_text(r'''
 #include <stdio.h>
@@ -66,14 +92,15 @@ int main(int argc, char **argv) {
         return subprocess.run([str(path or self.macos / "Quartz"), *arguments], env=environment,
                               capture_output=True, timeout=10)
 
-    def test_moved_bundle_preserves_arguments_and_sets_only_own_loader_paths(self):
+    def assert_moved_bundle_launch(self):
         moved = self.directory / "Moved Ω browser with spaces.app"
         self.app.rename(moved)
         self.app = moved
         self.macos = moved / "Contents/MacOS"
-        environment = os.environ.copy()
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith(("DYLD_", "__XPC_DYLD_"))}
         environment.update({"DYLD_FRAMEWORK_PATH": "/invalid/inherited", "DYLD_LIBRARY_PATH": "/invalid/library",
-                            "DYLD_INSERT_LIBRARIES": "/invalid/injected.dylib", "DYLD_PRINT_LIBRARIES": "1",
+                            "DYLD_PRINT_LIBRARIES": "1",
                             "__XPC_DYLD_FRAMEWORK_PATH": "/invalid/xpc", "__XPC_DYLD_INSERT_LIBRARIES": "/invalid/xpc.dylib",
                             "QUARTZ_LAUNCHER_TEST": "retained", "PATH": "/invalid/no-search"})
         arguments = ["--quartz-webkit-info", "two words", "", "literal\nnewline", "$(unchanged)"]
@@ -88,6 +115,25 @@ int main(int argc, char **argv) {
             "__XPC_DYLD_FRAMEWORK_PATH=" + frameworks,
             "QUARTZ_LAUNCHER_TEST=retained",
         })
+
+    def test_moved_bundle_preserves_arguments_and_sets_only_own_loader_paths(self):
+        self.assert_moved_bundle_launch()
+
+    def test_launcher_clears_injected_library_settings_before_starting_runtime(self):
+        shutil.copy2(self.seeded_launcher, self.macos / "Quartz")
+        self.assert_moved_bundle_launch()
+
+    def test_launcher_is_hardened_without_loader_or_library_validation_exceptions(self):
+        # Verify the signed executable before copying it into the deliberately
+        # minimal fixture bundle, which has no Info.plist or resource seal.
+        launcher = self.launcher
+        run("codesign", "--verify", "--strict", launcher)
+        details = run("codesign", "--display", "--verbose=4", launcher).stderr.decode()
+        self.assertRegex(details, r"flags=0x[0-9a-f]+\([^)]*\bruntime\b[^)]*\)")
+        entitlements = run("codesign", "--display", "--entitlements", ":-", launcher).stdout
+        values = plistlib.loads(entitlements) if entitlements.strip() else {}
+        self.assertFalse(values.get("com.apple.security.cs.allow-dyld-environment-variables", False))
+        self.assertFalse(values.get("com.apple.security.cs.disable-library-validation", False))
 
     def test_launching_through_symlink_uses_the_real_bundle(self):
         alias = self.directory / "launch-link"

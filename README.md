@@ -2,7 +2,7 @@
 
 <img src="Artwork/AppIcon.png" width="128" height="128" alt="Quartz app icon: a faceted blue and teal crystal Q">
 
-A native macOS web browser.
+A native macOS web browser using the [QuartzBrowser WebKit fork](https://github.com/QuartzBrowser/WebKit).
 
 ## Screenshots
 
@@ -19,14 +19,25 @@ A native macOS web browser.
 
 ## Run
 
+Build the pinned WebKit engine once with full Xcode and the Metal toolchain,
+then run Quartz:
+
 ```sh
-swift run Quartz
+Scripts/build-webkit.sh
+Scripts/quartz.sh run
 ```
+
+The pinned engine build targets macOS 15.4 using the public SDK. Quartz derives
+its minimum macOS version from the built engine. See the [WebKit build guide](docs/WEBKIT.md)
+for prerequisites, a faster native-architecture build, and explicit system-WebKit
+development mode. The first engine build is substantial; later Quartz builds
+reuse the prepared engine.
 
 ## Build
 
 ```sh
-swift build
+Scripts/quartz.sh build
+Scripts/quartz.sh test
 ```
 
 ## Package
@@ -37,6 +48,19 @@ Create a local macOS app bundle:
 Scripts/package-macos-app.sh
 open dist/Quartz.app
 ```
+
+Packaging requires WebKit products containing both `arm64` and `x86_64`, as
+produced by the default `Scripts/build-webkit.sh` command. The app includes the
+fork's frameworks, supporting libraries, and XPC services. To inspect the engine
+actually loaded without opening a browser window:
+
+```sh
+dist/Quartz.app/Contents/MacOS/Quartz --quartz-webkit-info
+```
+
+`--quartz-webkit-smoke-test` also checks offline page layout and JavaScript using
+an isolated, nonpersistent web view. Packaging runs both checks on the host
+architecture; Intel hardware needs its own runtime verification.
 
 The default package is ad-hoc signed for local development. If macOS blocks a downloaded ad-hoc build with "Apple could not verify...", remove the quarantine attribute from the copy you trust:
 
@@ -52,7 +76,7 @@ process, including rebuilding the ZIP after stapling.
 
 ## Features
 
-- WebKit-powered browsing
+- Browsing powered by the pinned QuartzBrowser WebKit fork
 - Multiple native browser windows, including extension-created pages
 - Colorful local home page at `quartz://home` with search, discoveries, Facet, and extensions
 - In-browser updates with verified downloads, progress, and automatic restart
@@ -109,7 +133,7 @@ Use **Quartz > Check for Updates…** to check immediately, or turn off **Quartz
 
 [Sparkle](https://sparkle-project.org/) verifies the signed release feed and the update archive before extraction. A failed check or download shows an explanation and can be retried. Quartz keeps browsing data, extensions, and settings outside the app bundle, and the updater replaces the app itself.
 
-Update requests go to GitHub without browsing history or Facet data. Running with `swift run Quartz`, or packaging without an update signing key, provides a development build with updates unavailable. Existing releases that predate the updater need one manual installation of an updater-enabled release. Maintainers can find signing, release setup, and verification instructions in [docs/UPDATES.md](docs/UPDATES.md).
+Update requests go to GitHub without browsing history or Facet data. Running with `Scripts/quartz.sh run`, or packaging without an update signing key, provides a development build with updates unavailable. Existing releases that predate the updater need one manual installation of an updater-enabled release. Maintainers can find signing, release setup, and verification instructions in [docs/UPDATES.md](docs/UPDATES.md).
 
 ## Facet
 

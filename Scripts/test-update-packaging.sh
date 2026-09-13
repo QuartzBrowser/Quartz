@@ -28,6 +28,9 @@ SWIFT
 export SPARKLE_PRIVATE_KEY="$(cat "${TEST_DIR}/private-key")"
 export SPARKLE_PUBLIC_KEY="$(cat "${TEST_DIR}/public-key")"
 export SIGN_IDENTITY=-
+# This fixture may test the updater with the explicit system development build;
+# prepare-release otherwise requires fork products even when system mode is set.
+export QUARTZ_TEST_SYSTEM_RELEASE=1
 unset APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_PATH NOTARY_KEYCHAIN_PROFILE
 
 cat > "${TEST_DIR}/bootstrap.xml" <<'XML'

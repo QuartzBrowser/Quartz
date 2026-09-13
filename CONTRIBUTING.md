@@ -15,29 +15,38 @@ development checks, and pull request expectations for the macOS browser.
 
 ## Requirements
 
-- macOS 14 or newer
-- Xcode command line tools
-- Swift 6.0 or newer
+- Full Xcode 26.2 or newer, including the Metal toolchain; CI selects Xcode 26.6.
+- A macOS version supported by the engine you build. The current Xcode 26.6 /
+  SDK 26.5 build targets macOS 15.4; the prepared engine records its actual minimum.
+- Git, Python 3, Perl, and enough free storage for the WebKit source and build.
 
-Check your Swift toolchain with:
+Check prerequisites without downloading or compiling the engine:
 
 ```sh
-swift --version
+Scripts/build-webkit.sh --check
 ```
 
 ## Development
 
-Clone the repository, then run Quartz from the package root:
+Clone the repository, build the locked engine, then run Quartz from the package root:
 
 ```sh
-swift run Quartz
+Scripts/build-webkit.sh
+Scripts/quartz.sh run
 ```
 
-Build without launching the app:
+Build and test without launching the app:
 
 ```sh
-swift build
+Scripts/quartz.sh build
+Scripts/quartz.sh test
 ```
+
+The engine defaults to a universal build. `WEBKIT_ARCHS=arm64 Scripts/build-webkit.sh`
+builds only Apple Silicon for local development; universal packaging still requires
+both architectures. The [WebKit guide](docs/WEBKIT.md) explains engine paths,
+source updates, verification, and `QUARTZ_USE_SYSTEM_WEBKIT=1` for explicitly
+testing against Apple's system engine. Report which engine you used.
 
 Most browser UI work lives under `Sources/Quartz/`. Keep changes close to the
 existing AppKit and WebKit flow unless the feature really needs a new surface.
@@ -47,8 +56,8 @@ existing AppKit and WebKit flow unless the feature really needs a new surface.
 Run the focused reader and download checks with:
 
 ```sh
-swift test --filter QuartzReaderModeTests
-swift test --filter 'QuartzDownloadTests|QuartzDownloadDestinationTests'
+Scripts/quartz.sh test --filter QuartzReaderModeTests
+Scripts/quartz.sh test --filter 'QuartzDownloadTests|QuartzDownloadDestinationTests'
 ```
 
 The reader tests load the HTML fixtures under `Tests/QuartzTests/Fixtures/Reader`
@@ -75,7 +84,9 @@ Scripts/package-macos-app.sh
 open dist/Quartz.app
 ```
 
-The default local package is ad-hoc signed. Automated releases use Ed25519
+Packaging verifies the pinned universal engine, embeds its frameworks and XPC
+services, and checks the loaded WebKit path. The default local package is ad-hoc
+signed. Automated releases use Ed25519
 signatures for the update feed and app archive without requiring a paid Apple
 Developer account. See [update setup](docs/UPDATES.md) for signing configuration
 and the initial macOS download warning.
@@ -86,7 +97,10 @@ Before opening a pull request:
 
 - Keep the change focused on one bug, feature, or documentation improvement.
 - Update `README.md` or other docs when user-facing behavior changes.
-- Run `swift build` and, when relevant, `swift run Quartz`.
+- Run `Scripts/quartz.sh build` and, when relevant, `Scripts/quartz.sh run`.
+- For engine integration changes, run `python3 Scripts/test-webkit-bundle.py`,
+  then test and package with the real fork. Fixture tests and system-engine
+  development checks do not establish that the fork builds or renders pages.
 - For packaging changes, run `bash -n Scripts/package-macos-app.sh` and smoke
   test `Scripts/package-macos-app.sh`.
 - For extension changes, follow the [sample installation checks](docs/extensions.md)

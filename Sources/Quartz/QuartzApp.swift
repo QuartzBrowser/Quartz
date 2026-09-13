@@ -9,6 +9,10 @@ struct QuartzApp {
 
     @MainActor
     static func main() {
+        QuartzWebKitRuntime.checkBeforeLaunch()
+        if CommandLine.arguments.contains("--quartz-webkit-smoke-test") {
+            QuartzWebKitSmokeTest.run()
+        }
         let app = NSApplication.shared
         let delegate = BrowserController()
 
@@ -233,6 +237,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     private func buildWindow() {
         let configuration = WKWebViewConfiguration()
+        QuartzWebKitRuntime.configureWritingTools(for: configuration)
         configuration.websiteDataStore = WKWebsiteDataStore.default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.setURLSchemeHandler(
@@ -259,6 +264,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         standardWebView = initialWebView
         webView = initialWebView
 
+        QuartzWebKitRuntime.configureWritingTools(for: addressField)
         addressField.placeholderString = "Search or enter website name"
         addressField.target = self
         addressField.action = #selector(addressSubmitted(_:))
@@ -534,6 +540,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         windowsMenuItem.submenu = windowsMenu
         mainMenu.addItem(windowsMenuItem)
 
+        QuartzWebKitRuntime.configureWritingTools(for: mainMenu)
         NSApplication.shared.mainMenu = mainMenu
         NSApplication.shared.windowsMenu = windowsMenu
     }
@@ -566,6 +573,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func makeWebView(configuration: WKWebViewConfiguration) -> WKWebView {
+        QuartzWebKitRuntime.configureWritingTools(for: configuration)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -926,6 +934,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         menu.addItem(.separator())
         menu.addItem(makeMenuItem(title: "Manage Extensions…", action: #selector(showExtensionStatus(_:))))
 
+        QuartzWebKitRuntime.configureWritingTools(for: menu)
         return menu
     }
 
@@ -1025,6 +1034,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         alert.addButton(withTitle: "Cancel")
 
         let inputField = NSTextField(frame: NSRect(x: 0, y: 0, width: 460, height: 24))
+        QuartzWebKitRuntime.configureWritingTools(for: inputField)
         inputField.placeholderString = "https://chromewebstore.google.com/detail/..."
         alert.accessoryView = inputField
 
@@ -1233,6 +1243,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         pendingNavigationURL = displayURL
 
         let configuration = WKWebViewConfiguration()
+        QuartzWebKitRuntime.configureWritingTools(for: configuration)
         configuration.websiteDataStore = WKWebsiteDataStore.default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.setURLSchemeHandler(
@@ -1647,6 +1658,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         let text = NSTextView(frame: scroll.bounds)
+        QuartzWebKitRuntime.configureWritingTools(for: text)
         text.isEditable = false
         text.isSelectable = true
         text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)

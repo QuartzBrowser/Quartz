@@ -27,6 +27,7 @@ final class QuartzExtensionManagerController: NSWindowController, NSTableViewDat
 
     private func configureContent() {
         guard let content = window?.contentView else { return }
+        QuartzWebKitRuntime.configureWritingTools(for: statusLabel)
         table.dataSource = self
         table.delegate = self
         table.allowsMultipleSelection = false
@@ -105,6 +106,7 @@ final class QuartzExtensionManagerController: NSWindowController, NSTableViewDat
         guard extensions.indices.contains(row) else { return nil }
         let item = extensions[row]
         let label = NSTextField(labelWithString: tableColumn?.identifier.rawValue == "name" ? item.displayName : item.status)
+        QuartzWebKitRuntime.configureWritingTools(for: label)
         label.lineBreakMode = .byTruncatingTail
         label.toolTip = tableColumn?.identifier.rawValue == "name" ? item.identifier : item.status
         return label

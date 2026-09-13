@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/QuartzBrowser/Quartz/compare/v1.0.0...v1.0.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **webkit:** update engine to 4a523b0b3d1d ([5268ee0](https://github.com/QuartzBrowser/Quartz/commit/5268ee08ac495f332c039950fa7e4083e3760d06))
+
 # [1.0.0](https://github.com/QuartzBrowser/Quartz/compare/v0.16.0...v1.0.0) (2026-09-13)
 
 

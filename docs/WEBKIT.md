@@ -220,6 +220,21 @@ by editing `QuartzWebKit.json`.
 ## CI cache
 
 The shared GitHub composite action caches only verified prepared products. Its
+toolchain identity retains compiler versions and targets, SDK settings, OS build,
+and architecture. It excludes the `InstalledDir` line from compiler version
+output: Metal's temporary cryptex mount path changes between otherwise identical
+runners. The identity's component hashes are logged for diagnosis.
+
+[`WebKit.cache-migration.json`](../WebKit.cache-migration.json) permits migration
+of one previously validated cache. It is eligible only if replaying the original
+identity with the recorded Metal installation path reproduces the exact old
+digest, and every recorded source/configuration hash still matches. Restoration
+uses the complete legacy key and reruns engine validation before saving under the
+new key. Different compiler/SDK inputs or source changes disable this migration;
+there is no broad cache-prefix fallback. The migration can be removed alongside
+a future engine-pin update.
+
+The cache's
 exact key includes the lock, build and bundling scripts, action definition,
 Xcode/compiler identity, SDK settings, Metal compiler, host OS, and runner
 architecture. There are no prefix restore keys. A cache miss builds the fork;

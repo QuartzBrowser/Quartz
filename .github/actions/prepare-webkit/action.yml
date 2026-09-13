@@ -19,39 +19,26 @@ runs:
       id: toolchain
       shell: bash
       run: |
-        python3 - <<'PY'
-        import hashlib
-        import os
-        from pathlib import Path
-        import subprocess
-
-        commands = [
-            ['xcodebuild', '-version'],
-            ['xcrun', 'swift', '--version'],
-            ['xcrun', '--sdk', 'macosx', '--show-sdk-version'],
-            ['xcrun', '--sdk', 'macosx', 'metal', '--version'],
-            ['sw_vers'],
-            ['uname', '-m'],
-        ]
-        identity = b''.join(subprocess.check_output(command) for command in commands)
-        sdk = Path(subprocess.check_output(
-            ['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip())
-        identity += (sdk / 'SDKSettings.json').read_bytes()
-        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-            output.write(f'identity={hashlib.sha256(identity).hexdigest()}\n')
-        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
-            output.write(f"QUARTZ_WEBKIT_PRODUCTS_DIR={os.environ['GITHUB_WORKSPACE']}/.build/quartz-webkit/products/Release\n")
-        PY
+        python3 Scripts/webkit-toolchain.py
+        printf '%s\n' "QUARTZ_WEBKIT_PRODUCTS_DIR=$GITHUB_WORKSPACE/.build/quartz-webkit/products/Release" >> "$GITHUB_ENV"
 
     - name: Restore exact prepared WebKit products
       id: cache
       uses: actions/cache/restore@v4
       with:
         path: .build/quartz-webkit/products/Release
-        key: quartz-webkit-universal-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.identity }}-${{ hashFiles('WebKit.lock.json', 'Scripts/build-webkit.sh', 'Scripts/webkit-bundle.py', '.github/actions/prepare-webkit/action.yml') }}
+        key: quartz-webkit-universal-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.identity }}-${{ hashFiles('WebKit.lock.json', 'Scripts/build-webkit.sh', 'Scripts/webkit-bundle.py', 'Scripts/webkit-toolchain.py', 'WebKit.cache-migration.json', '.github/actions/prepare-webkit/action.yml') }}
+
+    - name: Restore the compatible pre-normalization cache
+      id: legacy-cache
+      if: steps.cache.outputs.cache-hit != 'true' && steps.toolchain.outputs.legacy-key != ''
+      uses: actions/cache/restore@v4
+      with:
+        path: .build/quartz-webkit/products/Release
+        key: ${{ steps.toolchain.outputs.legacy-key }}
 
     - name: Build the pinned WebKit fork
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache.outputs.cache-hit != 'true' && steps.legacy-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         WEBKIT_ARCHS: arm64 x86_64

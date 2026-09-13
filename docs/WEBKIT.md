@@ -172,50 +172,41 @@ the installed macOS WebKit. Normal release preparation refuses this mode.
 `QUARTZ_TEST_SYSTEM_RELEASE=1` is reserved for disposable updater fixtures and
 does not establish fork or release compatibility.
 
-## Automatic engine updates
+## Maintaining and updating the fork
 
-Push or merge engine updates into
-[`QuartzBrowser/WebKit`'s `main` branch](https://github.com/QuartzBrowser/WebKit/tree/main)
-to ship them through Quartz's existing updater. Quartz's
-[`release` workflow](../.github/workflows/release.yml) checks that branch every
-five minutes and during normal Quartz releases. Feature branches do not trigger
-engine releases. The detector accepts only revisions that descend from the
-current `WebKit.lock.json` pin; a rewritten or unrelated history fails the check.
+Use fork `quartz-dev` for customizations and upstream integrations, and promote a
+tested batch to fork `main` when it is ready for shipping. Quartz publication is
+manual: neither engine pushes nor Quartz `main` pushes publish releases. Normal
+Quartz PR and `main` builds remain automatic.
 
-Before changing the committed pin, the release job builds the candidate engine
-for Apple Silicon and Intel, runs Quartz's tests and packaged rendering/network
-checks, and validates the updater pipeline. Once those checks pass, it commits
-the pin with a `fix(webkit)` Conventional Commit and runs semantic-release in the
-same workflow. Engine-only changes produce a Quartz patch release; other pending
-Quartz changes can require a minor or major version. Users receive the bundled
-engine with that Quartz update.
+In **Quartz > Actions > build > Run workflow**, `engine_revision` can select a
+full forward candidate SHA from a fork development branch for validation without
+committing a pin or publishing. In **Actions > release > Run workflow**, choose
+Quartz `main` and supply a full promoted `engine_revision` to update the engine.
+Leave it empty to keep the committed `WebKit.lock.json` revision. The release
+selector requires the SHA to descend from the current pin and be reachable from
+fork `main`; it never silently chooses the latest engine tip.
 
-The release workflow is serialized, so overlapping checks cannot publish
-competing updates. Pending checks queue without replacing Quartz push releases;
-each checks the latest main branches after the previous run finishes. Several
-engine pushes may be collected into one release. A failed candidate build or
-validation leaves the committed pin and published release unchanged. If
-publication fails after the validated pin is committed, a later check retries
-that engine; it can add an empty `fix(webkit)` commit when the latest published
-release still lacks that revision.
+The serialized release path validates the selected application/engine pair,
+checks that Quartz main has not moved, commits a validated engine pin with a
+`fix(webkit)` Conventional Commit, and runs semantic-release. Engine-only updates
+produce a patch release; pending Quartz changes can raise the version further.
+Failures require an explicit new run or the separate `verify_version` input for
+rechecking an already published latest version. There is no scheduled retry.
 
-GitHub may delay scheduled runs and disables scheduled workflows in public
-repositories after 60 days without repository activity. The five-minute schedule
-is a check interval, not a delivery guarantee; an uncached engine build also takes
-time. **Actions > release > Run workflow**, with `verify_version` left empty,
-runs the same update and release path manually. The workflow uses the repository's
-existing `GITHUB_TOKEN` and Sparkle signing configuration; no cross-repository
-access token or WebKit workflow is needed. It publishes within the same run
-because a push made with `GITHUB_TOKEN` does not start another push workflow.
-See GitHub's [schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
-and [concurrency queue](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
-documentation for platform limits, including the maximum of 100 pending runs.
+The [WebKit maintenance manual](WEBKIT_MAINTENANCE.md) documents the complete
+branch model, source checkout setup, customization ledger, upstream merges,
+candidate commands, promotion, release inputs, retry and rollback procedures,
+validation evidence, and operational checklists. The [release checklist](releases.md)
+covers the actual packaging and public-download gates.
 
-For a local engine experiment, change the complete revision in
-`WebKit.lock.json`, then build from a clean checkout of that exact revision. To
-retain an existing checkout and its build, select new source, raw build, and
-products directories with the variables above. Do not relabel existing products
-by editing `QuartzWebKit.json`.
+For a local engine experiment, use
+`python3 Scripts/update-webkit.py candidate --revision FULL_LOWERCASE_SHA` on a
+clean Quartz test branch, then build that pinned source. Keep a separate full
+engine checkout for editing; the cached source is intentionally clean and sparse.
+To retain an existing candidate and its build, select separate source, raw build,
+and products directories with the variables above. Do not relabel existing
+products by editing `QuartzWebKit.json`.
 
 ## CI cache
 

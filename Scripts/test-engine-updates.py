@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Exercise engine release planning and publication against disposable Git repositories."""
+"""Exercise deliberate engine selection and publication in disposable Git repos.
+
+Fork commit and comparison responses are deterministic API fixtures; local file,
+index, commit, remote, retry, and concurrency behavior use real Git repositories.
+No test contacts GitHub or changes the developer's checkout or Git configuration.
+"""
 
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -22,6 +29,9 @@ CANDIDATE = "b" * 40
 OTHER = "c" * 40
 LOCK_NAME = "WebKit.lock.json"
 ENGINE_ENDPOINT = "/repos/QuartzBrowser/WebKit/commits/main"
+COMMIT_ENDPOINT = f"/repos/QuartzBrowser/WebKit/commits/{CANDIDATE}"
+ANCESTRY_ENDPOINT = f"/repos/QuartzBrowser/WebKit/compare/{PREVIOUS}...{CANDIDATE}"
+PROMOTION_ENDPOINT = f"/repos/QuartzBrowser/WebKit/compare/{CANDIDATE}...{OTHER}"
 RELEASE_ENDPOINT = "/repos/QuartzBrowser/Quartz/releases/latest"
 ERRORS = (RuntimeError, ValueError)
 
@@ -76,7 +86,9 @@ class EngineUpdateTests(unittest.TestCase):
         self.initial_head = self.head()
         self.responses = {
             ENGINE_ENDPOINT: {"sha": CANDIDATE},
-            f"/repos/QuartzBrowser/WebKit/compare/{PREVIOUS}...{CANDIDATE}": {
+            COMMIT_ENDPOINT: {"sha": CANDIDATE},
+            f"/repos/QuartzBrowser/WebKit/commits/{PREVIOUS}": {"sha": PREVIOUS},
+            ANCESTRY_ENDPOINT: {
                 "status": "ahead", "merge_base_commit": {"sha": PREVIOUS},
             },
             RELEASE_ENDPOINT: {"tag_name": "v1.0.0", "draft": False, "prerelease": False},
@@ -104,13 +116,27 @@ class EngineUpdateTests(unittest.TestCase):
     def write_lock(self, lock):
         (self.repository / LOCK_NAME).write_text(json.dumps(lock, indent=2) + "\n")
 
-    def plan(self):
-        return updates.plan_update(self.repository, self.api)
+    def plan(self, revision=CANDIDATE):
+        return updates.plan_update(self.repository, self.api, revision=revision)
 
-    def stage(self):
-        plan = self.plan()
+    def stage(self, revision=CANDIDATE):
+        plan = self.plan(revision=revision)
         updates.stage_update(self.repository, plan)
         return plan
+
+    def snapshot(self):
+        return (
+            self.head(), self.origin_head(),
+            (self.repository / LOCK_NAME).read_bytes(),
+            git(self.repository, "status", "--porcelain"),
+            git(self.repository, "diff"), git(self.repository, "diff", "--cached"),
+        )
+
+    def assert_rejected_without_changes(self, operation):
+        before = self.snapshot()
+        with self.assertRaises(ERRORS):
+            operation()
+        self.assertEqual(self.snapshot(), before)
 
     def pin_candidate(self):
         lock = self.read_lock()
@@ -121,8 +147,7 @@ class EngineUpdateTests(unittest.TestCase):
         git(self.repository, "push", "-q", "origin", "main")
 
     def test_published_current_engine_is_a_noop(self):
-        self.responses[ENGINE_ENDPOINT] = {"sha": PREVIOUS}
-        plan = self.plan()
+        plan = self.plan(revision=None)
         self.assertEqual(plan, {
             "quartz_revision": self.initial_head,
             "previous_revision": PREVIOUS,
@@ -136,6 +161,28 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertEqual(self.origin_head(), self.initial_head)
         self.assertEqual(git(self.repository, "status", "--porcelain"), "")
 
+    def test_default_plan_never_follows_or_queries_the_fork(self):
+        # Even an advanced or unavailable fork main cannot select a new engine.
+        for branch in [{"sha": CANDIDATE}, None, RuntimeError("Fork unavailable")]:
+            with self.subTest(branch=branch):
+                self.responses[ENGINE_ENDPOINT] = branch
+                self.requests.clear()
+                before = self.snapshot()
+                plan = self.plan(revision=None)
+                self.assertEqual(plan["revision"], PREVIOUS)
+                self.assertIs(plan["release_required"], False)
+                self.assertEqual(self.requests, [RELEASE_ENDPOINT])
+                self.assertEqual(self.snapshot(), before)
+
+    def test_default_plan_reads_committed_pin_and_preserves_local_edits(self):
+        self.write_lock(self.original_lock | {"revision": OTHER})
+        before = self.snapshot()
+        plan = self.plan(revision=None)
+        self.assertEqual(plan["revision"], PREVIOUS)
+        self.assertEqual(plan["previous_revision"], PREVIOUS)
+        self.assertEqual(self.snapshot(), before)
+        self.assert_rejected_without_changes(lambda: updates.stage_update(self.repository, plan))
+
     def test_descendant_engine_requires_a_release(self):
         plan = self.plan()
         self.assertEqual(plan["quartz_revision"], self.initial_head)
@@ -143,41 +190,75 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertEqual(plan["revision"], CANDIDATE)
         self.assertEqual(plan["published_revision"], PREVIOUS)
         self.assertIs(plan["release_required"], True)
+        self.assertEqual(self.requests, [COMMIT_ENDPOINT, ANCESTRY_ENDPOINT, ENGINE_ENDPOINT, RELEASE_ENDPOINT])
 
     def test_already_pinned_but_unpublished_engine_still_requires_a_release(self):
         self.pin_candidate()
-        plan = self.plan()
+        plan = self.plan(revision=None)
         self.assertEqual(plan["previous_revision"], CANDIDATE)
         self.assertEqual(plan["revision"], CANDIDATE)
         self.assertEqual(plan["published_revision"], PREVIOUS)
         self.assertIs(plan["release_required"], True)
-        self.assertFalse(any("/compare/" in path for path in self.requests))
+        self.assertEqual(self.requests, [RELEASE_ENDPOINT])
 
     def test_release_before_engine_integration_has_no_published_pin(self):
         self.responses[RELEASE_ENDPOINT]["tag_name"] = "v0.9.0"
-        self.responses[ENGINE_ENDPOINT] = {"sha": PREVIOUS}
-        plan = self.plan()
+        plan = self.plan(revision=None)
         self.assertEqual(plan["published_revision"], "")
         self.assertIs(plan["release_required"], True)
 
     def test_no_release_requires_initial_engine_publication(self):
         self.responses[RELEASE_ENDPOINT] = None
-        self.responses[ENGINE_ENDPOINT] = {"sha": PREVIOUS}
-        plan = self.plan()
+        plan = self.plan(revision=None)
         self.assertEqual(plan["published_revision"], "")
         self.assertIs(plan["release_required"], True)
 
     def test_candidate_commit_must_be_a_full_valid_sha(self):
-        for value in [None, 17, "", "b" * 39, "g" * 40, "refs/heads/main", "b" * 40 + "\n"]:
+        for value in [17, "", "b" * 39, "B" * 40, "g" * 40, "refs/heads/main", "b" * 40 + "\n"]:
             with self.subTest(value=value):
-                self.responses[ENGINE_ENDPOINT] = {"sha": value}
-                with self.assertRaises(ERRORS):
-                    self.plan()
+                self.requests.clear()
+                self.assert_rejected_without_changes(lambda: self.plan(revision=value))
+                self.assertEqual(self.requests, [])
 
     def test_missing_engine_response_is_not_a_noop(self):
-        self.responses[ENGINE_ENDPOINT] = None
-        with self.assertRaises(ERRORS):
-            self.plan()
+        for response in [None, [], {}, {"sha": PREVIOUS}, {"sha": "b" * 39}]:
+            with self.subTest(response=response):
+                self.responses[COMMIT_ENDPOINT] = response
+                self.assert_rejected_without_changes(self.plan)
+
+    def test_explicit_current_pin_is_validated_and_does_not_release_again(self):
+        self.responses[ENGINE_ENDPOINT] = {"sha": PREVIOUS}
+        plan = self.plan(revision=PREVIOUS)
+        self.assertEqual(plan["revision"], PREVIOUS)
+        self.assertIs(plan["release_required"], False)
+        self.assertEqual(self.requests, [
+            f"/repos/QuartzBrowser/WebKit/commits/{PREVIOUS}", ENGINE_ENDPOINT, RELEASE_ENDPOINT,
+        ])
+
+    def test_explicit_selection_can_be_older_than_promoted_main(self):
+        self.responses[ENGINE_ENDPOINT] = {"sha": OTHER}
+        self.responses[PROMOTION_ENDPOINT] = {"status": "ahead", "merge_base_commit": {"sha": CANDIDATE}}
+        plan = self.plan()
+        self.assertEqual(plan["revision"], CANDIDATE)
+        self.assertIn(PROMOTION_ENDPOINT, self.requests)
+
+    def test_unpromoted_or_invalid_membership_is_rejected(self):
+        self.responses[ENGINE_ENDPOINT] = {"sha": OTHER}
+        for response in [
+            None, [], {}, {"status": "ahead"},
+            {"status": "ahead", "merge_base_commit": {"sha": PREVIOUS}},
+            *({"status": status, "merge_base_commit": {"sha": CANDIDATE}}
+              for status in ["behind", "diverged", "identical", "unknown"]),
+        ]:
+            with self.subTest(response=response):
+                self.responses[PROMOTION_ENDPOINT] = response
+                self.assert_rejected_without_changes(self.plan)
+
+    def test_missing_or_malformed_promoted_branch_is_rejected(self):
+        for response in [None, [], {}, {"sha": None}, {"sha": "main"}, {"sha": "B" * 40}]:
+            with self.subTest(response=response):
+                self.responses[ENGINE_ENDPOINT] = response
+                self.assert_rejected_without_changes(self.plan)
 
     def test_malformed_lock_is_rejected(self):
         changes = [
@@ -190,16 +271,18 @@ class EngineUpdateTests(unittest.TestCase):
                 self.write_lock(self.original_lock | change)
                 git(self.repository, "add", LOCK_NAME)
                 git(self.repository, "commit", "-qm", "test: record malformed engine metadata")
-                with self.assertRaises(ERRORS):
-                    self.plan()
+                self.assert_rejected_without_changes(self.plan)
+                self.assert_rejected_without_changes(lambda: self.plan(revision=None))
+                self.assert_rejected_without_changes(
+                    lambda: updates.candidate_update(self.repository, self.api, CANDIDATE),
+                )
 
     def test_rollback_and_divergence_are_rejected(self):
         endpoint = f"/repos/QuartzBrowser/WebKit/compare/{PREVIOUS}...{CANDIDATE}"
         for status in ["behind", "diverged", "identical", "unexpected"]:
             with self.subTest(status=status):
                 self.responses[endpoint] = {"status": status, "merge_base_commit": {"sha": PREVIOUS}}
-                with self.assertRaises(ERRORS):
-                    self.plan()
+                self.assert_rejected_without_changes(self.plan)
 
     def test_ahead_comparison_must_have_the_current_pin_as_merge_base(self):
         endpoint = f"/repos/QuartzBrowser/WebKit/compare/{PREVIOUS}...{CANDIDATE}"
@@ -210,16 +293,16 @@ class EngineUpdateTests(unittest.TestCase):
         ]:
             with self.subTest(response=response):
                 self.responses[endpoint] = response
-                with self.assertRaises(ERRORS):
-                    self.plan()
+                self.assert_rejected_without_changes(self.plan)
 
     def test_api_failure_aborts_instead_of_treating_engine_as_current(self):
-        for endpoint in list(self.responses):
+        self.responses[ENGINE_ENDPOINT] = {"sha": OTHER}
+        self.responses[PROMOTION_ENDPOINT] = {"status": "ahead", "merge_base_commit": {"sha": CANDIDATE}}
+        for endpoint in [COMMIT_ENDPOINT, ANCESTRY_ENDPOINT, ENGINE_ENDPOINT, PROMOTION_ENDPOINT, RELEASE_ENDPOINT]:
             with self.subTest(endpoint=endpoint):
                 previous = self.responses[endpoint]
                 self.responses[endpoint] = RuntimeError("Synthetic API failure")
-                with self.assertRaises(ERRORS):
-                    self.plan()
+                self.assert_rejected_without_changes(self.plan)
                 self.responses[endpoint] = previous
         self.assertEqual(self.head(), self.initial_head)
         self.assertEqual(self.read_lock(), self.original_lock)
@@ -247,6 +330,179 @@ class EngineUpdateTests(unittest.TestCase):
         self.responses[RELEASE_ENDPOINT]["tag_name"] = "v1.0.1"
         with self.assertRaises(ERRORS):
             self.plan()
+
+    def test_candidate_stages_unpromoted_commit_without_main_or_release_requests(self):
+        self.responses[ENGINE_ENDPOINT] = RuntimeError("Candidate must not query main")
+        self.responses[RELEASE_ENDPOINT] = RuntimeError("Candidate must not query releases")
+        untracked = self.repository / "personal-notes.txt"
+        untracked.write_text("Keep this untracked file.\n")
+        candidate = updates.candidate_update(self.repository, self.api, CANDIDATE)
+        self.assertEqual(candidate, {
+            "quartz_revision": self.initial_head,
+            "previous_revision": PREVIOUS,
+            "revision": CANDIDATE,
+        })
+        self.assertEqual(self.requests, [COMMIT_ENDPOINT, ANCESTRY_ENDPOINT])
+        self.assertEqual(self.read_lock(), self.original_lock | {"revision": CANDIDATE})
+        self.assertEqual(git(self.repository, "diff", "--name-only"), LOCK_NAME)
+        self.assertEqual(git(self.repository, "diff", "--cached", "--name-only"), "")
+        self.assertEqual(self.head(), self.initial_head)
+        self.assertEqual(self.origin_head(), self.initial_head)
+        self.assertEqual(untracked.read_text(), "Keep this untracked file.\n")
+        # Build evidence is deliberately not a release plan.
+        self.assert_rejected_without_changes(lambda: updates.commit_update(self.repository, candidate))
+
+    def test_candidate_current_revision_validates_existence_without_rewriting_lock(self):
+        original_bytes = (self.repository / LOCK_NAME).read_bytes()
+        result = updates.candidate_update(self.repository, self.api, PREVIOUS)
+        self.assertEqual(result["revision"], PREVIOUS)
+        self.assertEqual(self.requests, [f"/repos/QuartzBrowser/WebKit/commits/{PREVIOUS}"])
+        self.assertEqual((self.repository / LOCK_NAME).read_bytes(), original_bytes)
+        self.assertEqual(git(self.repository, "status", "--porcelain"), "")
+
+    def test_candidate_rejects_malformed_revisions_before_network_access(self):
+        for revision in [None, 17, "", "b" * 39, "B" * 40, "g" * 40, "main", "b" * 40 + "\n"]:
+            with self.subTest(revision=revision):
+                self.assert_rejected_without_changes(
+                    lambda: updates.candidate_update(self.repository, self.api, revision),
+                )
+        self.assertEqual(self.requests, [])
+
+    def test_candidate_rejects_unavailable_or_mismatched_fork_commits(self):
+        for response in [None, [], {}, {"sha": PREVIOUS}, {"sha": "b" * 39}]:
+            with self.subTest(response=response):
+                self.responses[COMMIT_ENDPOINT] = response
+                self.requests.clear()
+                self.assert_rejected_without_changes(
+                    lambda: updates.candidate_update(self.repository, self.api, CANDIDATE),
+                )
+                self.assertEqual(self.requests, [COMMIT_ENDPOINT])
+
+    def test_candidate_rejects_backward_divergent_and_unverifiable_ancestry(self):
+        for response in [
+            None, [], {}, {"status": "ahead"},
+            {"status": "ahead", "merge_base_commit": {"sha": OTHER}},
+            *({"status": status, "merge_base_commit": {"sha": PREVIOUS}}
+              for status in ["behind", "diverged", "identical", "unknown"]),
+        ]:
+            with self.subTest(response=response):
+                self.responses[ANCESTRY_ENDPOINT] = response
+                self.assert_rejected_without_changes(
+                    lambda: updates.candidate_update(self.repository, self.api, CANDIDATE),
+                )
+
+    def test_candidate_api_failures_preserve_worktree_index_and_history(self):
+        for endpoint in [COMMIT_ENDPOINT, ANCESTRY_ENDPOINT]:
+            with self.subTest(endpoint=endpoint):
+                previous = self.responses[endpoint]
+                self.responses[endpoint] = RuntimeError("Synthetic API failure")
+                self.assert_rejected_without_changes(
+                    lambda: updates.candidate_update(self.repository, self.api, CANDIDATE),
+                )
+                self.responses[endpoint] = previous
+
+    def test_candidate_requires_clean_tracked_tree_and_index(self):
+        for path in ["README.md", LOCK_NAME]:
+            with self.subTest(path=path):
+                original_bytes = (self.repository / path).read_bytes()
+                (self.repository / path).write_text("Preserve this local work.\n")
+                self.assert_rejected_without_changes(
+                    lambda: updates.candidate_update(self.repository, self.api, CANDIDATE),
+                )
+                git(self.repository, "add", "--", path)
+                self.assert_rejected_without_changes(
+                    lambda: updates.candidate_update(self.repository, self.api, CANDIDATE),
+                )
+                git(self.repository, "restore", "--staged", "--", path)
+                (self.repository / path).write_bytes(original_bytes)
+        new_file = self.repository / "new-feature.txt"
+        new_file.write_text("New staged work.\n")
+        git(self.repository, "add", "--", new_file.name)
+        self.assert_rejected_without_changes(
+            lambda: updates.candidate_update(self.repository, self.api, CANDIDATE),
+        )
+        self.assertEqual(self.requests, [])
+
+    def test_candidate_preserves_edits_made_during_api_validation(self):
+        for staged in [False, True]:
+            with self.subTest(staged=staged):
+                expected = []
+
+                def edit_during_validation(path):
+                    result = self.api(path)
+                    if path == ANCESTRY_ENDPOINT:
+                        self.write_lock(self.original_lock | {"minimumXcode": "99.0"})
+                        if staged:
+                            git(self.repository, "add", LOCK_NAME)
+                        expected.append(self.snapshot())
+                    return result
+
+                with self.assertRaises(ERRORS):
+                    updates.candidate_update(self.repository, edit_during_validation, CANDIDATE)
+                self.assertEqual(self.snapshot(), expected[0])
+                git(self.repository, "restore", "--staged", "--", LOCK_NAME)
+                self.write_lock(self.original_lock)
+
+    def test_candidate_rejects_head_changes_during_api_validation(self):
+        expected = []
+
+        def commit_during_validation(path):
+            result = self.api(path)
+            if path == ANCESTRY_ENDPOINT:
+                git(self.repository, "commit", "--allow-empty", "-qm", "chore: concurrent local work")
+                expected.append(self.snapshot())
+            return result
+
+        with self.assertRaises(ERRORS):
+            updates.candidate_update(self.repository, commit_during_validation, CANDIDATE)
+        self.assertEqual(self.snapshot(), expected[0])
+
+    def test_cli_candidate_emits_build_evidence_json(self):
+        stdout = io.StringIO()
+        with patch.object(sys, "argv", [
+            "update-webkit.py", "--repository", str(self.repository), "candidate", "--revision", CANDIDATE,
+        ]), patch.object(updates, "github_api", self.api), contextlib.redirect_stdout(stdout):
+            updates.main()
+        self.assertEqual(json.loads(stdout.getvalue()), {
+            "quartz_revision": self.initial_head, "previous_revision": PREVIOUS, "revision": CANDIDATE,
+        })
+        self.assertEqual(self.requests, [COMMIT_ENDPOINT, ANCESTRY_ENDPOINT])
+        self.assertEqual(self.read_lock(), self.original_lock | {"revision": CANDIDATE})
+
+    def test_cli_default_plan_writes_pinned_json_and_github_outputs(self):
+        output_file = self.directory / "plans" / "engine.json"
+        github_output = self.directory / "github-output.txt"
+        stdout = io.StringIO()
+        with patch.object(sys, "argv", [
+            "update-webkit.py", "--repository", str(self.repository), "plan", "--output", str(output_file),
+        ]), patch.object(updates, "github_api", self.api), patch.dict(os.environ, {
+            "GITHUB_OUTPUT": str(github_output),
+        }), contextlib.redirect_stdout(stdout):
+            updates.main()
+        plan = json.loads(stdout.getvalue())
+        self.assertEqual(plan["revision"], PREVIOUS)
+        self.assertEqual(json.loads(output_file.read_text()), plan)
+        self.assertEqual(self.requests, [RELEASE_ENDPOINT])
+        outputs = dict(line.split("=", 1) for line in github_output.read_text().splitlines())
+        self.assertEqual(json.loads(outputs["plan"]), plan)
+        self.assertEqual(outputs["quartz_revision"], self.initial_head)
+        self.assertEqual(outputs["release_required"], "false")
+
+    def test_cli_invalid_selection_reports_error_without_stdout_or_mutation(self):
+        for command in ["plan", "candidate"]:
+            with self.subTest(command=command):
+                stdout, stderr = io.StringIO(), io.StringIO()
+                before = self.snapshot()
+                with patch.object(sys, "argv", [
+                    "update-webkit.py", "--repository", str(self.repository), command, "--revision", "main",
+                ]), patch.object(updates, "github_api", self.api), contextlib.redirect_stdout(stdout), \
+                        contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as failure:
+                    updates.main()
+                self.assertEqual(failure.exception.code, 1)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn("complete lowercase Git revision", stderr.getvalue())
+                self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.requests, [])
 
     def test_stage_changes_only_engine_revision(self):
         self.stage()
@@ -305,7 +561,7 @@ class EngineUpdateTests(unittest.TestCase):
     def test_pending_publication_creates_a_release_retry_commit(self):
         self.pin_candidate()
         previous_head = self.head()
-        plan = self.stage()
+        plan = self.stage(revision=None)
         updates.commit_update(self.repository, plan)
         self.assertNotEqual(self.head(), previous_head)
         self.assertEqual(self.origin_head(), self.head())
@@ -335,7 +591,14 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertEqual(self.origin_head(), published_head)
 
     def test_concurrent_main_push_is_refused_before_creating_a_commit(self):
-        plan = self.stage()
+        self.assert_concurrent_push_rejected(self.stage())
+
+    def test_unchanged_engine_app_release_still_rejects_concurrent_main_push(self):
+        plan = self.stage(revision=None)
+        self.assertIs(plan["release_required"], False)
+        self.assert_concurrent_push_rejected(plan)
+
+    def assert_concurrent_push_rejected(self, plan):
         other = self.directory / "other-clone"
         git(self.directory, "clone", "-q", str(self.origin), str(other))
         git(other, "config", "user.name", "Other Fixture")

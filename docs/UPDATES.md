@@ -49,10 +49,15 @@ owned by another user can require moving the app or macOS authorization. Sparkle
 handles installation and relaunch; Quartz retains its existing application
 support data and session restoration.
 
-## Automatic releases
+## Deliberately requested releases
 
-Conventional Commits on `main` continue to drive semantic-release. The release job
-runs the Swift tests, builds a universal app with the pinned Sparkle framework,
+Maintainers start publication with **Actions > release > Run workflow** on Quartz
+`main`. Ordinary pushes and merges do not publish. Conventional Commits collected
+on `main` determine semantic-release's version once publication is requested.
+Leave `engine_revision` empty to keep the committed engine pin, or select a full
+promoted fork SHA to ship an engine batch. See the
+[WebKit maintenance manual](WEBKIT_MAINTENANCE.md) for the branch, candidate,
+promotion, retry, and publication procedures. The release job runs the Swift tests, builds a universal app with the pinned Sparkle framework,
 signs nested helper executables before their containing bundles, and verifies
 code signatures. It then signs the final ZIP and appcast and independently verifies
 the archive against the app's embedded public key.

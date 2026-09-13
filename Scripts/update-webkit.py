@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Plan, validate, and commit forward-only updates from QuartzBrowser/WebKit/main.
+"""Select, validate, and stage deliberate Quartz WebKit engine updates.
 
-Planning is read-only. The release workflow builds the staged candidate before
-calling commit, then publishes in the same run (GITHUB_TOKEN pushes do not start
-another push workflow).
+`plan` is read-only and keeps the committed engine pin by default. An explicit
+`plan --revision FULL_SHA` selects a forward descendant that has been promoted to
+QuartzBrowser/WebKit/main. The release workflow builds the staged plan before
+calling `commit`; publication retries retain the same validated engine.
+
+`candidate --revision FULL_SHA` validates any forward fork commit, including a
+development branch, and changes only the local lock revision for build testing.
+It requires a clean tracked tree/index, leaves the change unstaged, and never
+queries releases or the promoted branch, commits, pushes, or publishes anything.
 """
 
 import argparse
@@ -67,19 +73,49 @@ def validate_plan(plan):
         raise ValueError("Inconsistent engine update plan")
 
 
-def plan_update(repository, api):
-    lock = read_lock((repository / LOCK).read_text())
-    candidate = api("/repos/QuartzBrowser/WebKit/commits/main")
-    if not isinstance(candidate, dict):
-        raise RuntimeError("Could not resolve WebKit main")
-    revision = sha(candidate.get("sha"))
+def ensure_descendant(api, previous, revision, message):
+    """Require exact ancestry, rather than accepting a merely newer timestamp."""
+    if revision == previous:
+        return
+    comparison = api(f"/repos/QuartzBrowser/WebKit/compare/{previous}...{revision}")
+    if (not isinstance(comparison, dict) or comparison.get("status") != "ahead"
+            or not isinstance(comparison.get("merge_base_commit"), dict)
+            or comparison["merge_base_commit"].get("sha") != previous):
+        raise RuntimeError(message)
+
+
+def select_revision(api, previous, revision, promoted):
+    """Resolve an exact fork SHA and enforce forward, optionally promoted history."""
+    sha(revision)
+    candidate = api(f"/repos/QuartzBrowser/WebKit/commits/{revision}")
+    if not isinstance(candidate, dict) or candidate.get("sha") != revision:
+        raise RuntimeError("The selected WebKit revision is unavailable in QuartzBrowser/WebKit")
+    ensure_descendant(
+        api, previous, revision,
+        "The selected WebKit revision must descend from the current pin; refusing a rollback or divergent history",
+    )
+    if promoted:
+        branch = api("/repos/QuartzBrowser/WebKit/commits/main")
+        if not isinstance(branch, dict):
+            raise RuntimeError("Could not resolve promoted WebKit main")
+        promoted_revision = sha(branch.get("sha"))
+        ensure_descendant(
+            api, revision, promoted_revision,
+            "The selected WebKit revision must be on promoted QuartzBrowser/WebKit/main; test development commits with candidate",
+        )
+    return revision
+
+
+def plan_update(repository, api, revision=None):
+    """Plan publication using the committed pin, or an explicitly promoted SHA.
+
+    An unchanged pin may still require publication when the latest stable release
+    predates it. Omission of revision must never implicitly follow a fork branch.
+    """
+    quartz_revision = head(repository)
+    lock = read_lock(git(repository, "show", f"{quartz_revision}:{LOCK}").stdout)
     previous = lock["revision"]
-    if revision != previous:
-        comparison = api(f"/repos/QuartzBrowser/WebKit/compare/{previous}...{revision}")
-        if (not isinstance(comparison, dict) or comparison.get("status") != "ahead"
-                or not isinstance(comparison.get("merge_base_commit"), dict)
-                or comparison["merge_base_commit"].get("sha") != previous):
-            raise RuntimeError("WebKit main must descend from the current pin; refusing a rollback or divergent history")
+    revision = previous if revision is None else select_revision(api, previous, revision, promoted=True)
 
     published = ""
     release = api("/repos/QuartzBrowser/Quartz/releases/latest")
@@ -99,7 +135,7 @@ def plan_update(repository, api):
             published = read_lock(git(repository, "show", f"{ref}:{LOCK}").stdout)["revision"]
 
     return {
-        "quartz_revision": head(repository),
+        "quartz_revision": quartz_revision,
         "previous_revision": previous,
         "revision": revision,
         "published_revision": published,
@@ -118,17 +154,48 @@ def ensure_clean_index(repository):
         raise RuntimeError("Refusing to include existing staged work in an engine update")
 
 
-def stage_update(repository, plan):
-    ensure_base(repository, plan)
+def ensure_clean_worktree(repository):
     ensure_clean_index(repository)
     if git(repository, "diff", "--name-only", "HEAD").stdout.strip():
         raise RuntimeError("Engine staging requires a clean tracked working tree")
+
+
+def write_revision(repository, lock, revision):
+    if lock["revision"] != revision:
+        lock = {**lock, "revision": revision}
+        (repository / LOCK).write_text(json.dumps(lock, indent=2) + "\n")
+
+
+def candidate_update(repository, api, revision):
+    """Stage an exact forward fork commit locally for build-only validation.
+
+    No release plan is produced: unpromoted candidates cannot enter publication
+    by passing this operation's output to `commit`. Check the base and tracked
+    files again after network validation to preserve intervening local work.
+    """
+    sha(revision)
+    quartz_revision = head(repository)
+    ensure_clean_worktree(repository)
+    lock = read_lock(git(repository, "show", f"{quartz_revision}:{LOCK}").stdout)
+    select_revision(api, lock["revision"], revision, promoted=False)
+    if head(repository) != quartz_revision:
+        raise RuntimeError("Quartz HEAD changed during candidate validation; retry against its new HEAD")
+    ensure_clean_worktree(repository)
+    write_revision(repository, lock, revision)
+    return {
+        "quartz_revision": quartz_revision,
+        "previous_revision": lock["revision"],
+        "revision": revision,
+    }
+
+
+def stage_update(repository, plan):
+    ensure_base(repository, plan)
+    ensure_clean_worktree(repository)
     lock = read_lock((repository / LOCK).read_text())
     if lock["revision"] != plan["previous_revision"]:
         raise RuntimeError("The engine pin changed after planning")
-    if lock["revision"] != plan["revision"]:
-        lock["revision"] = plan["revision"]
-        (repository / LOCK).write_text(json.dumps(lock, indent=2) + "\n")
+    write_revision(repository, lock, plan["revision"])
 
 
 def commit_update(repository, plan, push=True):
@@ -187,15 +254,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=Path, default=ROOT)
     commands = parser.add_subparsers(dest="command", required=True)
-    planner = commands.add_parser("plan")
+    planner = commands.add_parser("plan", help="Plan a release with the committed pin or an explicit promoted SHA")
     planner.add_argument("--output", type=Path)
+    planner.add_argument("--revision", help="Full lowercase fork commit SHA already promoted to WebKit main (default: committed pin)")
+    candidate = commands.add_parser("candidate", help="Stage a forward fork SHA locally for build testing, without publication")
+    candidate.add_argument("--revision", required=True, help="Full lowercase fork commit SHA, including development commits")
     for name in ("stage", "commit"):
         command = commands.add_parser(name)
         command.add_argument("--plan", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == "plan":
-            plan = plan_update(args.repository, github_api)
+            plan = plan_update(args.repository, github_api, revision=args.revision)
             encoded = json.dumps(plan, separators=(",", ":"))
             if args.output:
                 args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +275,8 @@ def main():
                     output.write(f"plan={encoded}\nquartz_revision={plan['quartz_revision']}\n")
                     output.write(f"release_required={str(plan['release_required']).lower()}\n")
             print(encoded)
+        elif args.command == "candidate":
+            print(json.dumps(candidate_update(args.repository, github_api, args.revision), separators=(",", ":")))
         else:
             plan = json.loads(args.plan.read_text())
             if args.command == "stage":

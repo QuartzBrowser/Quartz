@@ -53,6 +53,7 @@ enum QuartzExtensionPermissionPrompt {
         let descriptions = permissions.sorted().map(QuartzExtensionPermissionDescription.permission)
             + matchPatterns.sorted().map(QuartzExtensionPermissionDescription.website)
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 460, height: 0))
+        QuartzWebKitRuntime.configureWritingTools(for: textView)
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false

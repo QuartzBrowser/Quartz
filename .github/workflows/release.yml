@@ -24,20 +24,28 @@ concurrency:
 jobs:
   release:
     if: github.event_name != 'workflow_dispatch' || inputs.verify_version == ''
-    name: Release
-    runs-on: blacksmith-6vcpu-macos-15
-    timeout-minutes: 60
+    name: Release with Quartz WebKit
+    runs-on: ${{ vars.QUARTZ_WEBKIT_RUNNER || 'blacksmith-6vcpu-macos-26' }}
+    timeout-minutes: 360
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Test engine bundle validation
+        run: |
+          python3 Scripts/test-webkit-bundle.py
+          python3 Scripts/test-webkit-launcher.py
+
+      - name: Prepare the pinned WebKit fork
+        uses: ./.github/actions/prepare-webkit
+
       - name: Run tests before preparing a release
         run: |
           Scripts/test-published-feed.sh
-          swift test
+          Scripts/quartz.sh test
           Scripts/test-update-packaging.sh
 
       - name: Run semantic-release

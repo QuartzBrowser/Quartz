@@ -1,0 +1,68 @@
+name: Prepare Quartz WebKit
+description: Build or restore the exact universal WebKit fork and verify its products.
+runs:
+  using: composite
+  steps:
+    - name: Check the WebKit toolchain
+      shell: bash
+      run: |
+        if ! xcrun --sdk macosx metal --version >/dev/null 2>&1; then
+          xcodebuild -downloadComponent MetalToolchain
+        fi
+        Scripts/build-webkit.sh --check
+
+    - name: Identify the compiler, SDK, and host
+      id: toolchain
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import hashlib
+        import os
+        from pathlib import Path
+        import subprocess
+
+        commands = [
+            ['xcodebuild', '-version'],
+            ['xcrun', 'swift', '--version'],
+            ['xcrun', '--sdk', 'macosx', '--show-sdk-version'],
+            ['xcrun', '--sdk', 'macosx', 'metal', '--version'],
+            ['sw_vers'],
+            ['uname', '-m'],
+        ]
+        identity = b''.join(subprocess.check_output(command) for command in commands)
+        sdk = Path(subprocess.check_output(
+            ['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip())
+        identity += (sdk / 'SDKSettings.json').read_bytes()
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+            output.write(f'identity={hashlib.sha256(identity).hexdigest()}\n')
+        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+            output.write(f"QUARTZ_WEBKIT_PRODUCTS_DIR={os.environ['GITHUB_WORKSPACE']}/.build/quartz-webkit/products/Release\n")
+        PY
+
+    - name: Restore exact prepared WebKit products
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .build/quartz-webkit/products/Release
+        key: quartz-webkit-universal-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.identity }}-${{ hashFiles('WebKit.lock.json', 'Scripts/build-webkit.sh', 'Scripts/webkit-bundle.py', '.github/actions/prepare-webkit/action.yml') }}
+
+    - name: Build the pinned WebKit fork
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        WEBKIT_ARCHS: arm64 x86_64
+        WEBKIT_JOBS: ${{ vars.QUARTZ_WEBKIT_JOBS || '4' }}
+        WEBKIT_PRODUCTS_DIR: ${{ github.workspace }}/.build/quartz-webkit/products/Release
+      run: Scripts/build-webkit.sh
+
+    - name: Verify provenance, dependencies, and both architectures
+      shell: bash
+      run: |
+        python3 Scripts/webkit-bundle.py verify "$QUARTZ_WEBKIT_PRODUCTS_DIR" --arch arm64 --arch x86_64
+
+    - name: Cache verified prepared products
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .build/quartz-webkit/products/Release
+        key: ${{ steps.cache.outputs.cache-primary-key }}

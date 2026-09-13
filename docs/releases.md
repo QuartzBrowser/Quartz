@@ -13,6 +13,10 @@ key, and notarization credentials. Record unavailable checks as unrun.
 
 Run commands from the repository root. `Scripts/package-macos-app.sh` rebuilds
 the destination app, so use a dedicated output directory when retaining artifacts.
+Build the pinned universal WebKit engine first with `Scripts/build-webkit.sh`.
+See [the engine guide](WEBKIT.md) for prerequisites and architecture selection.
+The pinned engine build targets macOS 15.4 using the public SDK; package metadata
+and the update feed derive their minimum OS from the built engine.
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
@@ -22,6 +26,7 @@ the destination app, so use a dedicated output directory when retaining artifact
 | `BUILD_NUMBER` | `VERSION` | `CFBundleVersion`; one to three dot-separated numeric components. |
 | `CONFIGURATION` | `release` | Swift build configuration. |
 | `DIST_DIR` | Repository `dist/` | App and optional ZIP output directory. |
+| `QUARTZ_WEBKIT_PRODUCTS_DIR` | `.build/quartz-webkit/products/Release` | Verified universal products from the locked QuartzBrowser WebKit fork. |
 | `SPARKLE_PUBLIC_KEY` | Unset | Existing base64 Ed25519 public key for updater-enabled packages. Without it, in-app updates are unavailable. |
 | `SPARKLE_FEED_URL` | Canonical GitHub latest `appcast.xml` URL | HTTPS feed location; see [update setup](UPDATES.md). |
 
@@ -38,7 +43,9 @@ releases use their defaults.
 - [ ] Run the tests and package into a new directory:
 
 ```sh
-swift test
+Scripts/build-webkit.sh
+Scripts/quartz.sh test
+python3 Scripts/test-webkit-bundle.py
 bash -n Scripts/package-macos-app.sh
 QUARTZ_DIST="$(mktemp -d -t quartz-local)"
 DIST_DIR="$QUARTZ_DIST" SIGN_IDENTITY=- ZIP_APP=1 Scripts/package-macos-app.sh
@@ -54,11 +61,15 @@ codesign --verify --deep --strict --verbose=2 "$QUARTZ_DIST/Quartz.app"
 codesign --display --verbose=4 "$QUARTZ_DIST/Quartz.app"
 xcrun lipo "$QUARTZ_DIST/Quartz.app/Contents/MacOS/Quartz" -verify_arch arm64 x86_64
 xcrun lipo "$QUARTZ_DIST/Quartz.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle" -verify_arch arm64 x86_64
+"$QUARTZ_DIST/Quartz.app/Contents/MacOS/Quartz" --quartz-webkit-info
+"$QUARTZ_DIST/Quartz.app/Contents/MacOS/Quartz" --quartz-webkit-smoke-test
 ```
 
 The display output should identify an ad-hoc signature. The package script builds
-both `arm64` and `x86_64` and signs Sparkle's nested helpers before the framework
-and app, preserving the Downloader's entitlements. A successful build or signature
+both `arm64` and `x86_64`, embeds the verified WebKit fork, and signs the engine's
+frameworks and XPC services before the app. It also signs Sparkle's nested helpers,
+preserving the Downloader's entitlements. The engine diagnostic must report
+`mode: fork`, `valid: true`, and the framework path inside this app. A successful build or signature
 check does not prove launch on both architectures.
 
 - [ ] Test the ZIP and the app extracted from those exact bytes:
@@ -68,11 +79,15 @@ unzip -t "$QUARTZ_DIST/Quartz.zip"
 QUARTZ_UNPACKED="$(mktemp -d -t quartz-unpacked)"
 ditto -x -k "$QUARTZ_DIST/Quartz.zip" "$QUARTZ_UNPACKED"
 codesign --verify --deep --strict --verbose=2 "$QUARTZ_UNPACKED/Quartz.app"
+"$QUARTZ_UNPACKED/Quartz.app/Contents/MacOS/Quartz" --quartz-webkit-info
+"$QUARTZ_UNPACKED/Quartz.app/Contents/MacOS/Quartz" --quartz-webkit-smoke-test
 open "$QUARTZ_UNPACKED/Quartz.app"
 ```
 
-`Quartz.app` must be at the archive root with its executable and embedded framework
-intact. Quit any other Quartz process before launching this test copy. Follow the
+`Quartz.app` must be at the archive root with its executable, WebKit frameworks,
+supporting libraries, XPC services, and Sparkle intact. The diagnostic must load
+WebKit from this extracted app, without depending on the original build directory.
+Quit any other Quartz process before launching this test copy. Follow the
 smoke checklist below.
 
 Gatekeeper rejection is expected for downloaded ad-hoc builds. For a local test
@@ -172,6 +187,14 @@ exercise the stapled ticket. Do not remove quarantine for this verification.
 
 ## Packaged-app smoke test
 
+- [ ] Run `--quartz-webkit-info` against the extracted app and record its fork
+  revision, loaded framework path, and minimum macOS version.
+- [ ] Run `--quartz-webkit-smoke-test` against that app. It checks offline HTML
+  layout and JavaScript in an isolated nonpersistent web view with a 45-second
+  timeout. This exercises the host architecture; it is not an Intel hardware test.
+- [ ] Load a real HTTPS page, execute JavaScript, and inspect the app's WebContent,
+  Networking, and GPU processes. A passing framework-path diagnostic alone does
+  not establish that the engine's child processes work.
 - [ ] Confirm the native window opens; use the address field, back/forward, and
   Home. Relaunch after visiting a page and check session restoration.
 - [ ] Exercise the behavior changed in the release, including an ordinary page,
@@ -187,9 +210,18 @@ exercise the stapled ticket. Do not remove quarantine for this verification.
 ## Automated release boundary
 
 Conventional Commits merged into `main` drive `.github/workflows/release.yml` and
-`release.config.cjs`. The workflow tests the code and packaging, prepares a
-universal ad-hoc app, signs the frozen ZIP and appcast with the existing Sparkle
+`release.config.cjs`. The workflow selects Xcode 26.6 on `macos-26`, restores
+verified products from an exact engine/toolchain cache key or builds the locked
+fork, and runs the tests against that engine. It prepares a universal ad-hoc app
+with the engine embedded, signs the frozen ZIP and appcast with the existing Sparkle
 key, publishes them with `SHA256SUMS`, and verifies fresh public downloads.
+
+System-WebKit development mode is rejected by normal release preparation. The
+updater test script's `QUARTZ_TEST_SYSTEM_RELEASE=1` exception is only for
+disposable fixtures; the hosted release job does not select the system engine.
+An uncached fork build can be lengthy. A workflow definition or a successful
+fixture test is not evidence of a completed engine build or published release;
+record actual hosted and packaged runtime results before release approval.
 
 The version-specific downloads must match the prepared release assets exactly.
 The public `releases/latest/download/appcast.xml` route can briefly serve the

@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:?usage: prepare-release.sh VERSION}"
+if [[ "${QUARTZ_USE_SYSTEM_WEBKIT:-0}" == 1 && "${QUARTZ_TEST_SYSTEM_RELEASE:-0}" != 1 ]]; then
+    echo "error: public releases require the pinned Quartz WebKit fork; see docs/WEBKIT.md" >&2
+    exit 1
+fi
 if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "error: release version must be a numeric major.minor.patch" >&2
     exit 1
@@ -28,6 +32,7 @@ cd "${ROOT_DIR}"
 rm -rf "${RELEASE_DIR}"
 mkdir -p "${RELEASE_DIR}"
 VERSION="${VERSION}" BUILD_NUMBER="${VERSION}" DIST_DIR="${BUNDLE_DIR}" ZIP_APP=0 \
+    QUARTZ_APP_ARCHS="arm64 x86_64" \
     SPARKLE_FEED_URL="${FEED_URL}" SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY}" \
     SIGN_IDENTITY="-" \
     "${ROOT_DIR}/Scripts/package-macos-app.sh"

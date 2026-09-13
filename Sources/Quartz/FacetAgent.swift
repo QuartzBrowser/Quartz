@@ -208,6 +208,7 @@ final class FacetPanelView: NSView {
         titleRow.spacing = 8
         titleRow.translatesAutoresizingMaskIntoConstraints = false
 
+        QuartzWebKitRuntime.configureWritingTools(for: transcriptTextView)
         transcriptTextView.isEditable = false
         transcriptTextView.isSelectable = true
         transcriptTextView.drawsBackground = false
@@ -290,6 +291,11 @@ final class FacetPanelView: NSView {
 
         let modelLabel = FacetPanelView.makeSettingLabel("Model")
         let reasoningLabel = FacetPanelView.makeSettingLabel("Reasoning")
+        let textFields: [NSTextField] = [
+            titleLabel, statusLabel, apiKeyField, apiKeyStatusLabel, promptField,
+            historyDisclosure, modelLabel, reasoningLabel
+        ]
+        for field in textFields { QuartzWebKitRuntime.configureWritingTools(for: field) }
         let settingsGrid = NSGridView(views: [
             [modelLabel, modelRow],
             [reasoningLabel, reasoningPopup]

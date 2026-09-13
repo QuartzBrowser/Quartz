@@ -25,7 +25,8 @@ if 'SPARKLE_PRIVATE_KEY' in secrets and not public_key:
 print(public_key)
 PY
 )"
-swift package resolve
+# This downloads Sparkle's signing tools; it does not build or run Quartz.
+QUARTZ_USE_SYSTEM_WEBKIT=1 swift package resolve
 KEY_TOOL="${ROOT_DIR}/.build/artifacts/sparkle/Sparkle/bin/generate_keys"
 if [[ -n "${EXISTING_PUBLIC_KEY}" ]]; then
     LOCAL_PUBLIC_KEY="$("${KEY_TOOL}" --account "${KEY_ACCOUNT}" -p)"

@@ -16,11 +16,11 @@ concurrency:
 
 jobs:
   build:
-    name: Test and package (Xcode 16.4)
-    runs-on: blacksmith-6vcpu-macos-15
-    timeout-minutes: 20
+    name: Test and package Quartz WebKit (Xcode 26.6)
+    runs-on: ${{ vars.QUARTZ_WEBKIT_RUNNER || 'blacksmith-6vcpu-macos-26' }}
+    timeout-minutes: 360
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,10 +32,20 @@ jobs:
           xcrun swift --version
           xcrun --sdk macosx --show-sdk-version
 
+      - name: Test engine bundle validation
+        run: |
+          python3 Scripts/test-webkit-bundle.py
+          python3 Scripts/test-webkit-launcher.py
+
+      - name: Prepare the pinned WebKit fork
+        uses: ./.github/actions/prepare-webkit
+        with:
+          jobs: ${{ vars.QUARTZ_WEBKIT_JOBS || '4' }}
+
       - name: Run tests
         run: |
           Scripts/test-published-feed.sh
-          swift test
+          Scripts/quartz.sh test
 
       - name: Package universal macOS app
         run: Scripts/package-macos-app.sh
@@ -46,6 +56,12 @@ jobs:
         run: |
           xcrun lipo dist/Quartz.app/Contents/MacOS/Quartz -verify_arch arm64 x86_64
           unzip -t dist/Quartz.zip
+          QUARTZ_UNPACKED="$(mktemp -d)"
+          trap 'rm -rf "$QUARTZ_UNPACKED"' EXIT
+          ditto -x -k dist/Quartz.zip "$QUARTZ_UNPACKED"
+          codesign --verify --deep --strict "$QUARTZ_UNPACKED/Quartz.app"
+          "$QUARTZ_UNPACKED/Quartz.app/Contents/MacOS/Quartz" --quartz-webkit-info
+          python3 Scripts/test-webkit-runtime.py "$QUARTZ_UNPACKED/Quartz.app/Contents/MacOS/Quartz"
 
       - name: Verify update signing and tamper rejection with disposable keys
         run: Scripts/test-update-packaging.sh

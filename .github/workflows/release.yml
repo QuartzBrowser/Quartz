@@ -44,7 +44,9 @@ jobs:
           persist-credentials: false
 
       - name: Test engine update planning and commits
-        run: python3 Scripts/test-engine-updates.py
+        run: |
+          python3 Scripts/test-engine-updates.py
+          python3 Scripts/test-webkit-toolchain.py
 
       - name: Plan an engine update
         id: plan

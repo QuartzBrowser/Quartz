@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "cacheProducingCommit": "58e2273fcfff700c4fa576ee4313458b90760a7e",
+  "validatedRun": "https://github.com/QuartzBrowser/Quartz/actions/runs/34756322703",
+  "legacyIdentity": "99f2aa64334f16329b83065912a0769f2483117d9115f38f742357ba6f168d59",
+  "legacyKey": "quartz-webkit-universal-macOS-ARM64-99f2aa64334f16329b83065912a0769f2483117d9115f38f742357ba6f168d59-1cea0df2ef63db29df67c3d7fa4991335d3499ca992fd665569307cb0b7c15b1",
+  "metalInstalledDirs": [
+    "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.whYzGi/Metal.xctoolchain/usr/metal/current/bin",
+    "/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.whYzGi/Metal.xctoolchain/usr/metal/current/bin"
+  ],
+  "sourceHashes": {
+    "WebKit.lock.json": "5d3d44984238fca05964c89fff57cd9cb1706ba96ac545ad1a8b5515622ff608",
+    "Scripts/build-webkit.sh": "8d05c3fbfbfc185ec9c4537a374b3757ee25501fd588a423606957560cda44e0",
+    "Scripts/webkit-bundle.py": "49f6c5b7933d429ba42e64898db5171270df94d9f0351458e5e16c77b5080d0d",
+    "Scripts/webkit-toolchain.py": "9a8b6a60aa7f275533b2f83c07b5c24a14f5dae4a64ddcc6bd8ebbd0ac6312b2",
+    ".github/actions/prepare-webkit/action.yml": "2e1ecd478d410d00324cc90107d818c4ff8a4e0c56d73d1af2063ecd9eac3cff",
+    ".github/workflows/release.yml": "b586e0f8a189ea0ca0468fb64cddca02eee85cf5ca1da742f41f57eb56394396",
+    ".github/workflows/build.yml": "e9f08345bda1c3279907cfd1f14c4574ac085daf713bff90102a5dad1fdb9e1c"
+  }
+}

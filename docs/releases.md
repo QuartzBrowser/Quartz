@@ -209,12 +209,38 @@ exercise the stapled ticket. Do not remove quarantine for this verification.
 
 ## Automated release boundary
 
-Conventional Commits merged into `main` drive `.github/workflows/release.yml` and
-`release.config.cjs`. The workflow selects Xcode 26.6 on `macos-26`, restores
-verified products from an exact engine/toolchain cache key or builds the locked
-fork, and runs the tests against that engine. It prepares a universal ad-hoc app
-with the engine embedded, signs the frozen ZIP and appcast with the existing Sparkle
-key, publishes them with `SHA256SUMS`, and verifies fresh public downloads.
+Conventional Commits merged into Quartz's `main` and updates to
+[`QuartzBrowser/WebKit`'s `main`](https://github.com/QuartzBrowser/WebKit/tree/main)
+drive [the release workflow](../.github/workflows/release.yml) and
+`release.config.cjs`. A lightweight scheduled check runs every five minutes;
+normal Quartz releases also check for a newer engine. Only descendants of the
+committed [`WebKit.lock.json`](../WebKit.lock.json) revision are eligible.
+Feature-branch pushes do not publish engine updates.
+
+The serialized release job selects Xcode 26.6 on the configured macOS 26 runner,
+restores verified products from an exact engine/toolchain cache key or builds the
+candidate fork, and runs the existing tests, universal packaging, rendering/network,
+and updater checks. It commits a validated engine pin with a `fix(webkit)`
+Conventional Commit only after those gates pass. It then runs semantic-release
+in the same job, prepares a universal ad-hoc app with the engine embedded, signs
+the frozen ZIP and appcast with the existing Sparkle key, publishes them with
+`SHA256SUMS`, and verifies fresh public downloads. Engine-only updates cause patch
+releases; pending Quartz changes can raise the version further.
+
+A candidate engine build or validation failure leaves the committed pin and published
+release unchanged. A publication failure after the pin commit is retried by a
+later check while the latest published release lacks that engine revision; an
+empty `fix(webkit)` commit can make the retry releasable. Multiple engine pushes
+can be included in one release. GitHub schedules can be delayed or disabled after
+60 days of inactivity in a public repository, so check **Actions > release** if
+updates stop. **Run workflow** with `verify_version` empty invokes the same path
+manually.
+
+No new cross-repository credential is required: the detector reads the public
+fork and publishing uses Quartz's existing `GITHUB_TOKEN` and Sparkle key. The
+engine commit and publication share one workflow because the token's pushes do
+not trigger a second workflow. See [automatic engine updates](WEBKIT.md#automatic-engine-updates)
+for the branch and retry behavior.
 
 System-WebKit development mode is rejected by normal release preparation. The
 updater test script's `QUARTZ_TEST_SYSTEM_RELEASE=1` exception is only for

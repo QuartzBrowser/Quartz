@@ -34,6 +34,7 @@ jobs:
 
       - name: Test engine bundle validation
         run: |
+          python3 Scripts/test-engine-updates.py
           python3 Scripts/test-webkit-bundle.py
           python3 Scripts/test-webkit-launcher.py
 

@@ -1,5 +1,9 @@
 name: Prepare Quartz WebKit
 description: Build or restore the exact universal WebKit fork and verify its products.
+inputs:
+  jobs:
+    description: Number of concurrent WebKit build jobs.
+    default: '4'
 runs:
   using: composite
   steps:
@@ -51,7 +55,7 @@ runs:
       shell: bash
       env:
         WEBKIT_ARCHS: arm64 x86_64
-        WEBKIT_JOBS: ${{ vars.QUARTZ_WEBKIT_JOBS || '4' }}
+        WEBKIT_JOBS: ${{ inputs.jobs }}
         WEBKIT_PRODUCTS_DIR: ${{ github.workspace }}/.build/quartz-webkit/products/Release
       run: Scripts/build-webkit.sh
 

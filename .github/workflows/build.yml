@@ -39,6 +39,8 @@ jobs:
 
       - name: Prepare the pinned WebKit fork
         uses: ./.github/actions/prepare-webkit
+        with:
+          jobs: ${{ vars.QUARTZ_WEBKIT_JOBS || '4' }}
 
       - name: Run tests
         run: |

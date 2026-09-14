@@ -6,7 +6,7 @@ create a release. Maintainers choose when to publish a stable build from Quartz
 browser may receive beta updates.
 
 Use this manual alongside the [rollout checklist](#roll-out-the-channel-support)
-and the actual release record. Workflow configuration, a completed hosted build,
+and the [first stable/beta rollout record](BETA_ROLLOUT_2026-09-14.md). Workflow configuration, a completed hosted build,
 feed activation, native UI checks, and a real installation each establish a
 different part of release readiness; record their evidence separately.
 

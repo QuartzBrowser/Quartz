@@ -1,0 +1,90 @@
+{
+  "observed_at_utc": "2026-09-14T15:01:46.811601+00:00",
+  "stable_version": "1.1.0",
+  "beta_version": "1.1.1-beta.1",
+  "method": "SPUUpdater.checkForUpdateInformation with isolated UUID metadata hosts",
+  "installation_exercised": false,
+  "cases": [
+    {
+      "case": "legacy route migration",
+      "feed_url": "https://github.com/QuartzBrowser/Quartz/releases/latest/download/appcast.xml",
+      "current_build": "1.0.1",
+      "feed_signature_verified": true,
+      "installation_attempted": false,
+      "isolated_identity": "org.quartzbrowser.EligibilityProbe.f363bf79-dc59-414a-a441-8c7312c10f3e",
+      "requested_channel": "stable",
+      "selected": {
+        "build": "102.0.99",
+        "channel": "stable",
+        "download_url": "https://github.com/QuartzBrowser/Quartz/releases/download/v1.1.0/Quartz-v1.1.0-macos-universal.zip",
+        "version": "1.1.0"
+      },
+      "status": "update_available"
+    },
+    {
+      "case": "canonical legacy migration",
+      "feed_url": "https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml",
+      "current_build": "1.0.1",
+      "feed_signature_verified": true,
+      "installation_attempted": false,
+      "isolated_identity": "org.quartzbrowser.EligibilityProbe.d868f1b7-f7bc-4787-b360-634a863f053b",
+      "requested_channel": "stable",
+      "selected": {
+        "build": "102.0.99",
+        "channel": "stable",
+        "download_url": "https://github.com/QuartzBrowser/Quartz/releases/download/v1.1.0/Quartz-v1.1.0-macos-universal.zip",
+        "version": "1.1.0"
+      },
+      "status": "update_available"
+    },
+    {
+      "case": "stable excludes beta",
+      "feed_url": "https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml",
+      "current_build": "102.0.99",
+      "feed_signature_verified": true,
+      "installation_attempted": false,
+      "isolated_identity": "org.quartzbrowser.EligibilityProbe.f8a20bb5-9a8c-4397-b27e-9f28cee0b3db",
+      "reason": "You\u2019re up to date!",
+      "requested_channel": "stable",
+      "status": "no_update"
+    },
+    {
+      "case": "stable opts into beta",
+      "feed_url": "https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml",
+      "current_build": "102.0.99",
+      "feed_signature_verified": true,
+      "installation_attempted": false,
+      "isolated_identity": "org.quartzbrowser.EligibilityProbe.277bd27a-3981-4f7a-873d-c969267e7be1",
+      "requested_channel": "beta",
+      "selected": {
+        "build": "102.1.1",
+        "channel": "beta",
+        "download_url": "https://github.com/QuartzBrowser/Quartz/releases/download/v1.1.1-beta.1/Quartz-v1.1.1-beta.1-macos-universal.zip",
+        "version": "1.1.1-beta.1"
+      },
+      "status": "update_available"
+    },
+    {
+      "case": "beta opts out without downgrade",
+      "feed_url": "https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml",
+      "current_build": "102.1.1",
+      "feed_signature_verified": true,
+      "installation_attempted": false,
+      "isolated_identity": "org.quartzbrowser.EligibilityProbe.54360f20-2271-486d-af55-d5adb89da27a",
+      "reason": "You\u2019re up to date!",
+      "requested_channel": "stable",
+      "status": "no_update"
+    },
+    {
+      "case": "latest beta is current",
+      "feed_url": "https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml",
+      "current_build": "102.1.1",
+      "feed_signature_verified": true,
+      "installation_attempted": false,
+      "isolated_identity": "org.quartzbrowser.EligibilityProbe.3b13cb31-d69c-4e98-96f2-303b8533505a",
+      "reason": "You\u2019re up to date!",
+      "requested_channel": "beta",
+      "status": "no_update"
+    }
+  ]
+}

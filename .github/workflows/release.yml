@@ -4,18 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       engine_revision:
-        description: "Optional full WebKit commit SHA already promoted to fork main. Leave empty to keep the pinned engine."
+        description: "Optional exact WebKit SHA: promoted main for stable, quartz-dev for beta. Empty keeps the committed pin."
         required: false
         default: ""
         type: string
       verify_version:
-        description: "Recheck an existing release without publishing (for example, 1.0.1). Cannot be combined with engine_revision."
+        description: "Read-only recheck of an existing release and update feed (for example, 1.0.1 or 1.1.0-beta.1)."
+        required: false
+        default: ""
+        type: string
+      activate_version:
+        description: "Explicitly activate an existing release's signed update feed after failed feed publication. No new release."
         required: false
         default: ""
         type: string
 
 permissions:
   contents: read
+
+env:
+  SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
 
 concurrency:
   group: quartz-release
@@ -28,35 +36,58 @@ jobs:
     name: Validate the manual release request
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      channel: ${{ steps.validate-inputs.outputs.channel }}
+      branch: ${{ steps.validate-inputs.outputs.branch }}
     steps:
-      - name: Require main and unambiguous inputs
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require a release branch and unambiguous inputs
         id: validate-inputs
         shell: bash
         env:
           QUARTZ_ENGINE_REVISION: ${{ inputs.engine_revision }}
           QUARTZ_VERIFY_VERSION: ${{ inputs.verify_version }}
+          QUARTZ_ACTIVATE_VERSION: ${{ inputs.activate_version }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/main ]]; then
-            echo "error: run this workflow manually from Quartz main" >&2
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+            echo "error: run this workflow manually" >&2
             exit 1
           fi
-          if [[ -n "$QUARTZ_ENGINE_REVISION" && -n "$QUARTZ_VERIFY_VERSION" ]]; then
-            echo "error: choose engine publication or existing-release verification, not both" >&2
+          case "$GITHUB_REF" in
+            refs/heads/main) QUARTZ_RELEASE_BRANCH=main; QUARTZ_RELEASE_CHANNEL=stable ;;
+            refs/heads/beta) QUARTZ_RELEASE_BRANCH=beta; QUARTZ_RELEASE_CHANNEL=beta ;;
+            *) echo "error: select Quartz main for stable or beta for prerelease" >&2; exit 1 ;;
+          esac
+          QUARTZ_INPUT_COUNT=0
+          for QUARTZ_INPUT in "$QUARTZ_ENGINE_REVISION" "$QUARTZ_VERIFY_VERSION" "$QUARTZ_ACTIVATE_VERSION"; do
+            if [[ -n "$QUARTZ_INPUT" ]]; then QUARTZ_INPUT_COUNT=$((QUARTZ_INPUT_COUNT + 1)); fi
+          done
+          if [[ "$QUARTZ_INPUT_COUNT" -gt 1 ]]; then
+            echo "error: choose engine selection, read-only verification, or explicit feed activation" >&2
             exit 1
           fi
           if [[ -n "$QUARTZ_ENGINE_REVISION" && ! "$QUARTZ_ENGINE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
             echo "error: engine_revision must be a complete lowercase 40-character commit SHA" >&2
             exit 1
           fi
-          if [[ -n "$QUARTZ_VERIFY_VERSION" && ! "$QUARTZ_VERIFY_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "error: verify_version must be a numeric major.minor.patch version without v" >&2
-            exit 1
-          fi
+          for QUARTZ_VERSION in "$QUARTZ_VERIFY_VERSION" "$QUARTZ_ACTIVATE_VERSION"; do
+            if [[ -n "$QUARTZ_VERSION" ]]; then
+              QUARTZ_VERSION_CHANNEL="$(python3 Scripts/release-version.py "$QUARTZ_VERSION" --field channel)"
+              if [[ "$QUARTZ_VERSION_CHANNEL" != "$QUARTZ_RELEASE_CHANNEL" ]]; then
+                echo "error: requested version does not match the selected release branch" >&2
+                exit 1
+              fi
+            fi
+          done
+          printf 'channel=%s\nbranch=%s\n' "$QUARTZ_RELEASE_CHANNEL" "$QUARTZ_RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
 
   engine-update:
     name: Plan the selected engine release
     needs: validate-request
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_version == ''
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && inputs.verify_version == '' && inputs.activate_version == ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -64,6 +95,8 @@ jobs:
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
       release_required: ${{ steps.plan.outputs.release_required }}
+      channel: ${{ needs.validate-request.outputs.channel }}
+      branch: ${{ needs.validate-request.outputs.branch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,16 +114,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           QUARTZ_ENGINE_REVISION: ${{ inputs.engine_revision }}
+          QUARTZ_RELEASE_CHANNEL: ${{ needs.validate-request.outputs.channel }}
         run: |
           QUARTZ_PLAN_ARGS=()
           if [[ -n "$QUARTZ_ENGINE_REVISION" ]]; then
             QUARTZ_PLAN_ARGS+=(--revision "$QUARTZ_ENGINE_REVISION")
           fi
-          python3 Scripts/update-webkit.py plan "${QUARTZ_PLAN_ARGS[@]}"
+          python3 Scripts/update-webkit.py plan --channel "$QUARTZ_RELEASE_CHANNEL" "${QUARTZ_PLAN_ARGS[@]}"
 
   release:
     needs: engine-update
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_version == ''
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && inputs.verify_version == '' && inputs.activate_version == ''
     name: Release with Quartz WebKit
     permissions:
       contents: write
@@ -110,7 +144,8 @@ jobs:
         id: prepare-release-branch
         env:
           QUARTZ_RELEASE_BASE: ${{ github.sha }}
-        run: git switch --force-create main "$QUARTZ_RELEASE_BASE"
+          QUARTZ_RELEASE_BRANCH: ${{ needs.engine-update.outputs.branch }}
+        run: git switch --force-create "$QUARTZ_RELEASE_BRANCH" "$QUARTZ_RELEASE_BASE"
 
       - name: Stage the engine candidate for validation
         env:
@@ -158,16 +193,30 @@ jobs:
           echo "error: the validated engine has not been published; inspect the failure and manually rerun release" >&2
           exit 1
 
-      - name: Verify public release downloads
+      - name: Verify immutable public release downloads
         if: steps.release.outputs.new_release_published == 'true'
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.new_release_version }}
         run: Scripts/verify-published-update.sh "${RELEASE_VERSION}"
 
+      - name: Publish the verified signed update feed
+        if: steps.release.outputs.new_release_published == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.new_release_version }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 Scripts/publish-update-feed.py "$RELEASE_VERSION" --feed dist/release/appcast.xml --public-key "$SPARKLE_PUBLIC_KEY"
+
+      - name: Verify the active public update feed
+        if: steps.release.outputs.new_release_published == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.new_release_version }}
+        run: Scripts/verify-published-update.sh "$RELEASE_VERSION" --feed
+
   verify-published-release:
     name: Verify existing public release
     needs: validate-request
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_version != ''
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && inputs.verify_version != '' && inputs.activate_version == ''
     runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 20
     permissions:
@@ -188,10 +237,6 @@ jobs:
           RELEASE_VERSION: ${{ inputs.verify_version }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "error: expected a numeric major.minor.patch version" >&2
-            exit 1
-          fi
           VERIFY_DIST="$(mktemp -d)"
           trap 'rm -rf "${VERIFY_DIST}"' EXIT
           mkdir -p "${VERIFY_DIST}/release"
@@ -199,4 +244,40 @@ jobs:
             --dir "${VERIFY_DIST}/release" \
             --pattern "Quartz-v${RELEASE_VERSION}-macos-universal.zip" \
             --pattern appcast.xml --pattern SHA256SUMS
-          DIST_DIR="${VERIFY_DIST}" Scripts/verify-published-update.sh "${RELEASE_VERSION}"
+          DIST_DIR="${VERIFY_DIST}" Scripts/verify-published-update.sh "${RELEASE_VERSION}" --feed
+
+  activate-published-feed:
+    name: Activate an existing release's signed feed
+    needs: validate-request
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && inputs.activate_version != '' && inputs.verify_version == ''
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      RELEASE_VERSION: ${{ inputs.activate_version }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download the existing immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/release
+          gh release download "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" \
+            --dir dist/release --pattern "Quartz-v${RELEASE_VERSION}-macos-universal.zip" \
+            --pattern appcast.xml --pattern SHA256SUMS
+
+      - name: Verify immutable public release downloads before activation
+        run: Scripts/verify-published-update.sh "$RELEASE_VERSION"
+
+      - name: Activate the verified signed feed without replacing newer history
+        run: python3 Scripts/publish-update-feed.py "$RELEASE_VERSION" --feed dist/release/appcast.xml --public-key "$SPARKLE_PUBLIC_KEY"
+
+      - name: Verify the active public update feed
+        run: Scripts/verify-published-update.sh "$RELEASE_VERSION" --feed

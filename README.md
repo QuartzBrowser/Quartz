@@ -77,15 +77,18 @@ process, including rebuilding the ZIP after stapling.
 ## Maintaining the engine and publishing
 
 Engine customizations and upstream updates accumulate on the WebKit fork's
-`quartz-dev` branch. Test an exact engine SHA with Quartz, promote the tested
-batch to fork `main`, then explicitly run Quartz's `release` workflow to ship it.
-Neither ordinary commits nor pushes publish a release; Quartz PR/main CI remains
-automatic. A release with no engine input keeps the currently pinned engine.
+`quartz-dev` branch. Test an exact engine SHA with Quartz, then explicitly run
+Quartz's `release` workflow: application branch `beta` publishes prereleases
+using integrated engine history, and `main` publishes stable releases after
+engine promotion to fork `main`. Neither commits nor pushes publish releases;
+Quartz PR/main/beta CI remains automatic. Empty engine input keeps the committed
+pin and still checks its eligibility for the selected channel.
 
 The [WebKit maintenance manual](docs/WEBKIT_MAINTENANCE.md) covers development
 branches, upstream merges, customization records, candidate testing, promotion,
 manual publication, rollback, retries, caches, and checklists with copyable
-commands.
+commands. The [beta update manual](docs/BETA_UPDATES.md) covers opt-in, stable
+promotion, version ordering, the signed shared feed, recovery, and rollout.
 
 ## Features
 
@@ -143,6 +146,13 @@ transfer shows an error instead of reporting a completed file.
 Release builds check for updates about once an hour while Quartz is running. When a compatible update is available, an **Update & Restart** button appears in the browser toolbar. Click it to download, verify, and install the update, then restart Quartz and restore your current page. Download and installation progress appear in the browser. You can cancel while checking or downloading; installation starts only after you choose to update.
 
 Use **Quartz > Check for Updates…** to check immediately, or turn off **Quartz > Automatically Check for Updates** to disable automatic checks. Your existing preference is preserved. Manual checks still work when automatic checking is off.
+
+Choose **Quartz > Update Channel: Stable > Beta** to opt into beta releases as
+well as newer stable releases. Stable is the default. Switching back to Stable
+waits for a newer stable build and clears excluded pending beta offers; it does
+not downgrade the installed app. Channel changes are unavailable during update
+extraction and installation. See [beta updates](docs/BETA_UPDATES.md) for behavior
+and the rollout checklist; availability requires a release containing the selector.
 
 [Sparkle](https://sparkle-project.org/) verifies the signed release feed and the update archive before extraction. A failed check or download shows an explanation and can be retried. Quartz keeps browsing data, extensions, and settings outside the app bundle, and the updater replaces the app itself.
 

@@ -1,4 +1,5 @@
 import XCTest
+import Sparkle
 @testable import Quartz
 
 @MainActor
@@ -8,11 +9,60 @@ final class QuartzUpdateControllerTests: XCTestCase {
         let controller = fixture.makeController()
         for selector in [
             "feedURLStringForUpdater:",
+            "allowedChannelsForUpdater:",
             "updaterWillRelaunchApplication:",
             "updater:didFinishUpdateCycleForUpdateCheck:error:"
         ] {
             XCTAssertTrue(controller.responds(to: NSSelectorFromString(selector)), selector)
         }
+    }
+
+    func testStableIsDefaultEvenWhenRunningABetaBundle() throws {
+        let fixture = UpdateControllerFixture()
+        let bundle = try UpdateTestBundle(publicKey: nil, releaseVersion: "1.1.0-beta.2", releaseChannel: "beta")
+        XCTAssertEqual(fixture.makeController(bundle: bundle.bundle).updateChannel, .stable)
+        XCTAssertEqual(QuartzReleaseIdentity.displayVersion(in: bundle.bundle), "1.1.0-beta.2")
+    }
+
+    func testSelectedChannelPersistsAndUnknownPreferencesFailClosed() {
+        let fixture = UpdateControllerFixture()
+        let controller = fixture.makeController()
+        XCTAssertEqual(controller.updateChannel, .stable)
+        XCTAssertTrue(controller.selectUpdateChannel(.beta))
+        XCTAssertEqual(fixture.makeController().updateChannel, .beta)
+        XCTAssertTrue(controller.selectUpdateChannel(.stable))
+        XCTAssertEqual(fixture.makeController().updateChannel, .stable)
+        fixture.defaults.set("nightly", forKey: QuartzUpdateChannel.preferenceKey)
+        XCTAssertEqual(fixture.makeController().updateChannel, .stable)
+    }
+
+    func testBetaAddsItsChannelWithoutExcludingStableOrAllowingUnknownChannels() {
+        XCTAssertEqual(QuartzUpdateChannel.stable.sparkleChannels, [])
+        XCTAssertEqual(QuartzUpdateChannel.beta.sparkleChannels, ["beta"])
+        for channel in QuartzUpdateChannel.allCases {
+            XCTAssertTrue(channel.allows(nil))
+            XCTAssertTrue(channel.allows(""))
+            XCTAssertFalse(channel.allows("nightly"))
+        }
+        XCTAssertFalse(QuartzUpdateChannel.stable.allows("beta"))
+        XCTAssertTrue(QuartzUpdateChannel.beta.allows("beta"))
+    }
+
+    func testDisplayVersionFallsBackForOlderBundles() throws {
+        let bundle = try UpdateTestBundle(publicKey: nil)
+        XCTAssertEqual(QuartzReleaseIdentity.displayVersion(in: bundle.bundle), "0.8.0")
+    }
+
+    func testSparkleOrdersLegacyStableBetaAndFinalBuildsWithoutDowngradingReleaseLines() {
+        let comparator = SUStandardVersionComparator()
+        // Packaging maps 1.1.0-beta.1/.2 to 102.0.1/.2 and final to
+        // 102.0.99. The older 1.0.2 stable line maps to 101.2.99.
+        let ascendingBuilds = ["1.0.1", "101.2.99", "102.0.1", "102.0.2", "102.0.99"]
+        for (older, newer) in zip(ascendingBuilds, ascendingBuilds.dropFirst()) {
+            XCTAssertEqual(comparator.compareVersion(older, toVersion: newer), .orderedAscending)
+            XCTAssertEqual(comparator.compareVersion(newer, toVersion: older), .orderedDescending)
+        }
+        XCTAssertEqual(comparator.compareVersion("102.0.1", toVersion: "102.0.1"), .orderedSame)
     }
 
     func testLegacyAutomaticCheckOptOutMigratesToSparkle() {
@@ -178,7 +228,7 @@ private final class UpdateTestBundle {
     private let directory: URL
     let bundle: Bundle
 
-    init(publicKey: String?) throws {
+    init(publicKey: String?, releaseVersion: String? = nil, releaseChannel: String? = nil) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("QuartzUpdateTests-\(UUID().uuidString)", isDirectory: true)
         let app = directory.appendingPathComponent("Quartz.app", isDirectory: true)
         let contents = app.appendingPathComponent("Contents", isDirectory: true)
@@ -191,6 +241,8 @@ private final class UpdateTestBundle {
             "SUFeedURL": "https://updates.example.org/appcast.xml"
         ]
         metadata["SUPublicEDKey"] = publicKey
+        metadata["QuartzReleaseVersion"] = releaseVersion
+        metadata["QuartzReleaseChannel"] = releaseChannel
         let data = try PropertyListSerialization.data(fromPropertyList: metadata, format: .xml, options: 0)
         try data.write(to: contents.appendingPathComponent("Info.plist"))
         bundle = try XCTUnwrap(Bundle(url: app))

@@ -19,6 +19,21 @@ final class QuartzUpdateController: NSObject, SPUUpdaterDelegate {
     var isConfigured: Bool { Self.configurationIssue(in: bundle) == nil }
     var hasStarted: Bool { updater != nil }
     var canCancel: Bool { userDriver.canCancel }
+    var updateChannel: QuartzUpdateChannel { .selected(in: defaults) }
+    var canChangeUpdateChannel: Bool { userDriver.canChangeUpdateChannel }
+
+    /// The installer cannot be cancelled after installation starts. Keep the
+    /// choice unchanged during that phase instead of claiming an effective opt-out.
+    @discardableResult
+    func selectUpdateChannel(_ channel: QuartzUpdateChannel) -> Bool {
+        guard channel != updateChannel else { return true }
+        guard canChangeUpdateChannel else { return false }
+        defaults.set(channel.rawValue, forKey: QuartzUpdateChannel.preferenceKey)
+        manualCheckPending = false
+        userDriver.updateChannelDidChange()
+        updater?.resetUpdateCycleAfterShortDelay()
+        return true
+    }
 
     var automaticallyChecksForUpdates: Bool {
         get {
@@ -55,6 +70,7 @@ final class QuartzUpdateController: NSObject, SPUUpdaterDelegate {
                     ?? (bundle.object(forInfoDictionaryKey: Self.automaticChecksKey) as? Bool)
                     ?? true
             },
+            isUpdateChannelAllowed: { QuartzUpdateChannel.selected(in: defaults).allows($0) },
             stateChanged: stateChanged,
             presentMessage: presentMessage,
             openInformationURL: openInformationURL
@@ -162,14 +178,27 @@ final class QuartzUpdateController: NSObject, SPUUpdaterDelegate {
         bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String
     }
 
+    func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+        updateChannel.sparkleChannels
+    }
+
     func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
         prepareForRelaunch()
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        let needsFreshChannelCheck = userDriver.needsFreshChannelCheck
+        let channelWasInvalidated = userDriver.updateCycleDidFinish()
+        if needsFreshChannelCheck {
+            let explicitlyRequested = manualCheckPending
+            manualCheckPending = false
+            if !explicitlyRequested { userDriver.beginChannelRefreshCheck() }
+            updater.checkForUpdates()
+            return
+        }
         guard manualCheckPending else { return }
         manualCheckPending = false
-        guard userDriver.hasPendingManualCheck else { return }
+        guard userDriver.hasPendingManualCheck || channelWasInvalidated else { return }
         // Automatic no-update/error cycles have no user-driver alert. A fresh manual
         // cycle gives the user Sparkle's complete result, including compatibility errors.
         // Sparkle clears its active driver and sets canCheckForUpdates before this delegate.

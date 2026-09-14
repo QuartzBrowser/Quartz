@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - beta
   workflow_dispatch:
     inputs:
       engine_revision:
@@ -38,6 +39,11 @@ jobs:
         run: |
           python3 Scripts/test-engine-updates.py
           python3 Scripts/test-workflow-policy.py
+          python3 Scripts/test-release-version.py
+          python3 Scripts/test-release-appcast.py
+          python3 Scripts/test-prepare-release.py
+          python3 Scripts/test-verify-published-update.py
+          python3 Scripts/test-update-feed.py
 
   build:
     needs: workflow-policy
@@ -83,6 +89,7 @@ jobs:
       - name: Run tests
         run: |
           Scripts/test-published-feed.sh
+          python3 Scripts/test-update-feed.py
           Scripts/quartz.sh test
 
       - name: Package universal macOS app

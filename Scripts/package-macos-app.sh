@@ -13,13 +13,20 @@ if [[ -z "${DEFAULT_VERSION}" ]]; then
     DEFAULT_VERSION="0.0.0"
 fi
 VERSION="${VERSION:-${DEFAULT_VERSION}}"
-BUILD_NUMBER="${BUILD_NUMBER:-${VERSION}}"
+BASE_VERSION="$(python3 "${ROOT_DIR}/Scripts/release-version.py" "${VERSION}" --field base_version)"
+DERIVED_BUILD_NUMBER="$(python3 "${ROOT_DIR}/Scripts/release-version.py" "${VERSION}" --field build_version)"
+RELEASE_CHANNEL="$(python3 "${ROOT_DIR}/Scripts/release-version.py" "${VERSION}" --field channel)"
+if [[ -n "${BUILD_NUMBER:-}" && "${BUILD_NUMBER}" != "${DERIVED_BUILD_NUMBER}" ]]; then
+    echo "error: BUILD_NUMBER must match the release-version.py mapping (${DERIVED_BUILD_NUMBER}); remove the override" >&2
+    exit 1
+fi
+BUILD_NUMBER="${DERIVED_BUILD_NUMBER}"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-"${ROOT_DIR}/dist"}"
 APP_DIR="${DIST_DIR}/${PRODUCT_NAME}.app"
 APP_ICON="${ROOT_DIR}/Sources/Quartz/Resources/AppIcon.icns"
 SPARKLE_FRAMEWORK="${SPARKLE_FRAMEWORK:-${ROOT_DIR}/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework}"
-SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://github.com/QuartzBrowser/Quartz/releases/latest/download/appcast.xml}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
 read -r -a APP_ARCHS <<< "${QUARTZ_APP_ARCHS:-arm64 x86_64}"
 if [[ "${#APP_ARCHS[@]}" == 0 || "${#APP_ARCHS[@]}" -gt 2 || ( "${#APP_ARCHS[@]}" == 2 && "${APP_ARCHS[0]}" == "${APP_ARCHS[1]}" ) ]]; then
@@ -37,10 +44,6 @@ for architecture in "${APP_ARCHS[@]}"; do
     esac
 done
 
-if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! "${BUILD_NUMBER}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
-    echo "error: VERSION and BUILD_NUMBER must be numeric release versions" >&2
-    exit 1
-fi
 if [[ "${SPARKLE_FEED_URL}" != https://* && "${ALLOW_INSECURE_TEST_FEED:-0}" != "1" ]]; then
     echo "error: the update feed must use HTTPS" >&2
     exit 1
@@ -142,9 +145,13 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>${VERSION}</string>
+    <string>${BASE_VERSION}</string>
     <key>CFBundleVersion</key>
     <string>${BUILD_NUMBER}</string>
+    <key>QuartzReleaseVersion</key>
+    <string>${VERSION}</string>
+    <key>QuartzReleaseChannel</key>
+    <string>${RELEASE_CHANNEL}</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>

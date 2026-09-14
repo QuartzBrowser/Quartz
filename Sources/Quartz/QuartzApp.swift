@@ -75,11 +75,14 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var pendingUpdateReleaseURL: URL?
     private var checkForUpdatesMenuItem: NSMenuItem?
     private var automaticUpdatesMenuItem: NSMenuItem?
+    private var updateChannelMenuItem: NSMenuItem?
+    private var updateChannelChoices = [QuartzUpdateChannel: NSMenuItem]()
     private let updateProgressIndicator = NSProgressIndicator()
     private var updateController: QuartzUpdateController {
         (Self.applicationController ?? self).ownedUpdateController
     }
     private lazy var ownedUpdateController: QuartzUpdateController = QuartzUpdateController(
+        defaults: sessionDefaults,
         stateChanged: { [weak self] state in
             Self.latestUpdateState = state
             for browser in Self.openBrowsers {
@@ -403,6 +406,10 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.autoenablesItems = false
+        let aboutItem = NSMenuItem(title: "About Quartz…", action: #selector(showAboutQuartz(_:)), keyEquivalent: "")
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(.separator())
         let checkItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
         checkItem.target = self
         appMenu.addItem(checkItem)
@@ -416,6 +423,21 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         automaticItem.state = updateController.automaticallyChecksForUpdates ? .on : .off
         appMenu.addItem(automaticItem)
         automaticUpdatesMenuItem = automaticItem
+        let channelItem = NSMenuItem(title: "Update Channel", action: nil, keyEquivalent: "")
+        let channelMenu = NSMenu(title: "Update Channel")
+        channelMenu.autoenablesItems = false
+        for channel in QuartzUpdateChannel.allCases {
+            let item = NSMenuItem(title: channel.title, action: #selector(selectUpdateChannel(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = channel.rawValue
+            item.toolTip = channel.explanation
+            channelMenu.addItem(item)
+            updateChannelChoices[channel] = item
+        }
+        channelItem.submenu = channelMenu
+        appMenu.addItem(channelItem)
+        updateChannelMenuItem = channelItem
+        updateChannelMenu()
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Quartz", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
@@ -649,6 +671,32 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
         automaticUpdatesMenuItem?.state = updateController.automaticallyChecksForUpdates ? .on : .off
     }
 
+    @objc private func showAboutQuartz(_ sender: Any?) {
+        NSApplication.shared.orderFrontStandardAboutPanel(options: [
+            .applicationVersion: QuartzReleaseIdentity.displayVersion(in: .main)
+        ])
+    }
+
+    @objc private func selectUpdateChannel(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String,
+              let channel = QuartzUpdateChannel(rawValue: value),
+              channel != updateController.updateChannel,
+              updateController.selectUpdateChannel(channel) else { return }
+        updateChannelMenu()
+        presentUpdateMessage(title: "\(channel.title) Updates", message: channel.explanation, acknowledgement: {})
+    }
+
+    private func updateChannelMenu() {
+        updateChannelMenuItem?.title = "Update Channel: \(updateController.updateChannel.title)"
+        for (channel, item) in updateChannelChoices {
+            item.state = channel == updateController.updateChannel ? .on : .off
+            item.isEnabled = updateController.canChangeUpdateChannel
+        }
+        updateChannelMenuItem?.toolTip = updateController.canChangeUpdateChannel
+            ? updateController.updateChannel.explanation
+            : "The channel can be changed after the current update finishes preparing or installing."
+    }
+
     private func openUpdateRelease(_ url: URL) {
         NSApplication.shared.activate(ignoringOtherApps: true)
         window.deminiaturize(nil)
@@ -670,6 +718,7 @@ final class BrowserController: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     private func updateUpdateControls(_ state: QuartzUpdateState) {
+        updateChannelMenu()
         updateButton.isHidden = state == .idle
         updateButton.isEnabled = false
         cancelUpdateButton.isHidden = !updateController.canCancel

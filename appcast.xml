@@ -1,10 +1,17 @@
-<?xml version="1.0" standalone="yes"?>
-<!-- sparkle-sign-warning:
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
--->
-<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Quartz</title>
+        <item>
+            <title>1.1.0</title>
+            <pubDate>Mon, 14 Sep 2026 14:44:42 +0000</pubDate>
+            <link>https://github.com/QuartzBrowser/Quartz/releases/tag/v1.1.0</link>
+            <sparkle:version>102.0.99</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.4</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v1.1.0/Quartz-v1.1.0-macos-universal.zip" length="146025416" type="application/octet-stream" sparkle:edSignature="KOdxevotZ/j61xOvz503wCC2qyavW0HnGQ5FVc7FP17cr3q7EjmVUtkiiuzcJlERjJpvqNOpUfUdRiL++3o5Cg=="></enclosure>
+        </item>
         <item>
             <title>1.0.1</title>
             <pubDate>Sun, 13 Sep 2026 15:48:17 +0000</pubDate>
@@ -12,7 +19,7 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:version>1.0.1</sparkle:version>
             <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.4</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v1.0.1/Quartz-v1.0.1-macos-universal.zip" length="146004892" type="application/octet-stream" sparkle:edSignature="Bnoq77qFXQsorn1yqaQA88J9vVY1r3ZF3O2QXxNQYuIeSdgG8o11JW5IdH8hK4FgFnZQhEY5iofbkkxM029UDg=="/>
+            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v1.0.1/Quartz-v1.0.1-macos-universal.zip" length="146004892" type="application/octet-stream" sparkle:edSignature="Bnoq77qFXQsorn1yqaQA88J9vVY1r3ZF3O2QXxNQYuIeSdgG8o11JW5IdH8hK4FgFnZQhEY5iofbkkxM029UDg=="></enclosure>
         </item>
         <item>
             <title>1.0.0</title>
@@ -21,7 +28,7 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:version>1.0.0</sparkle:version>
             <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.4</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v1.0.0/Quartz-v1.0.0-macos-universal.zip" length="145923929" type="application/octet-stream" sparkle:edSignature="m1qvRkVNSoNO/8Do1Bd3tKqrmPvv1qFNGLdd+JzXcy0s/gtSeLiFjb7MuwT3BSNkcY1ura4zy8LiS3QRdrGLDQ=="/>
+            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v1.0.0/Quartz-v1.0.0-macos-universal.zip" length="145923929" type="application/octet-stream" sparkle:edSignature="m1qvRkVNSoNO/8Do1Bd3tKqrmPvv1qFNGLdd+JzXcy0s/gtSeLiFjb7MuwT3BSNkcY1ura4zy8LiS3QRdrGLDQ=="></enclosure>
         </item>
         <item>
             <title>0.16.0</title>
@@ -30,7 +37,7 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:version>0.16.0</sparkle:version>
             <sparkle:shortVersionString>0.16.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v0.16.0/Quartz-v0.16.0-macos-universal.zip" length="3845702" type="application/octet-stream" sparkle:edSignature="uH5qWH4TXBQQHVfsCbA7bAcJEOTRSr19jODjI6jbbyqDMnzalo2LHG6XbypDp3ZgzHJ03b2nWLXIlACoslDwAA=="/>
+            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v0.16.0/Quartz-v0.16.0-macos-universal.zip" length="3845702" type="application/octet-stream" sparkle:edSignature="uH5qWH4TXBQQHVfsCbA7bAcJEOTRSr19jODjI6jbbyqDMnzalo2LHG6XbypDp3ZgzHJ03b2nWLXIlACoslDwAA=="></enclosure>
         </item>
         <item>
             <title>0.15.0</title>
@@ -39,7 +46,7 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:version>0.15.0</sparkle:version>
             <sparkle:shortVersionString>0.15.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v0.15.0/Quartz-v0.15.0-macos-universal.zip" length="3831231" type="application/octet-stream" sparkle:edSignature="hYgpZz+tjY9BehXlfK8U/LS/xqvWW+6amPAVOlQuq5YZoL3QsoCQL+GhhRwArsH8jhjW8KV4c1HOjaCe+ULiDA=="/>
+            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v0.15.0/Quartz-v0.15.0-macos-universal.zip" length="3831231" type="application/octet-stream" sparkle:edSignature="hYgpZz+tjY9BehXlfK8U/LS/xqvWW+6amPAVOlQuq5YZoL3QsoCQL+GhhRwArsH8jhjW8KV4c1HOjaCe+ULiDA=="></enclosure>
         </item>
         <item>
             <title>0.14.1</title>
@@ -48,11 +55,10 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <sparkle:version>0.14.1</sparkle:version>
             <sparkle:shortVersionString>0.14.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v0.14.1/Quartz-v0.14.1-macos-universal.zip" length="3643340" type="application/octet-stream" sparkle:edSignature="IpfL+VxS5iDXFmrUXoTtl6O0taQAzdGbCvsQL0epkdJc0ivvqYQ043Y9eY5DSg6gpJKtd45fHNV4OKW1eU10Bg=="/>
+            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v0.14.1/Quartz-v0.14.1-macos-universal.zip" length="3643340" type="application/octet-stream" sparkle:edSignature="IpfL+VxS5iDXFmrUXoTtl6O0taQAzdGbCvsQL0epkdJc0ivvqYQ043Y9eY5DSg6gpJKtd45fHNV4OKW1eU10Bg=="></enclosure>
         </item>
     </channel>
-</rss>
-<!-- sparkle-signatures:
-edSignature: eY/NVjAHXihAfzJO4tGFtYYsYmrMbpyDqXIX2ezwwP13iVJbdl85CC/BVt71dIY1+EXYN4ctiwXKtPz+6e00AQ==
-length: 3992
+</rss><!-- sparkle-signatures:
+edSignature: rVBOyowgfdMKt8HoQePI/GKMyHtU9wC2cy95nQWYco9PGwknTVUcjJsRHix5OOyqHHZMB9Saoho+uqSVgYquDQ==
+length: 4785
 -->

@@ -1,3 +1,17 @@
+# [1.1.0](https://github.com/QuartzBrowser/Quartz/compare/v1.0.1...v1.1.0) (2026-09-14)
+
+
+### Bug Fixes
+
+* **ci:** support repeatable engine candidate validation ([7efe1b0](https://github.com/QuartzBrowser/Quartz/commit/7efe1b09fd2df6de59622c0256117f0bb0eec831))
+
+
+### Features
+
+* add opt-in beta updates ([a1fc416](https://github.com/QuartzBrowser/Quartz/commit/a1fc416692f24fa32727a5dc78b22ebc03a3e35c))
+* decouple WebKit development from Quartz releases ([43c5a75](https://github.com/QuartzBrowser/Quartz/commit/43c5a753149ba0b47f03a64395ff0ff27458f3c2))
+* decouple WebKit development from Quartz releases ([#66](https://github.com/QuartzBrowser/Quartz/issues/66)) ([2db5108](https://github.com/QuartzBrowser/Quartz/commit/2db5108d75bd870f5dd77a717bf8029d87c0368a))
+
 ## [1.0.1](https://github.com/QuartzBrowser/Quartz/compare/v1.0.0...v1.0.1) (2026-09-13)
 
 

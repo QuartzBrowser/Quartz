@@ -7,7 +7,6 @@ real Ed25519 feed bytes using both CryptoKit and the pinned Sparkle tools.
 
 import base64
 import importlib.util
-import json
 import os
 from pathlib import Path
 import subprocess

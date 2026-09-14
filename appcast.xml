@@ -4,6 +4,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Quartz</title>
         <item>
+            <title>1.1.1-beta.1</title>
+            <pubDate>Mon, 14 Sep 2026 14:59:15 +0000</pubDate>
+            <link>https://github.com/QuartzBrowser/Quartz/releases/tag/v1.1.1-beta.1</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>102.1.1</sparkle:version>
+            <sparkle:shortVersionString>1.1.1-beta.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.4</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/QuartzBrowser/Quartz/releases/download/v1.1.1-beta.1/Quartz-v1.1.1-beta.1-macos-universal.zip" length="146025417" type="application/octet-stream" sparkle:edSignature="99dZ6eLjsx/I2xaE2gDEmqDwh96Kh7Myb60b1y1ZcwEpLuPd7fAZRgPmNUPBjCLRV3Ei5ay+0FY8uYZ0isqPAg=="></enclosure>
+        </item>
+        <item>
             <title>1.1.0</title>
             <pubDate>Mon, 14 Sep 2026 14:44:42 +0000</pubDate>
             <link>https://github.com/QuartzBrowser/Quartz/releases/tag/v1.1.0</link>
@@ -59,6 +69,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: rVBOyowgfdMKt8HoQePI/GKMyHtU9wC2cy95nQWYco9PGwknTVUcjJsRHix5OOyqHHZMB9Saoho+uqSVgYquDQ==
-length: 4785
+edSignature: FLI8iaRVrXkAKXZXsA3dK0d6V3eDBK7en81tVxEp8moVJ/OcIcHV/2abenVOh7YDAs7oyOwuoTCWZmTTqjAiAg==
+length: 5595
 -->

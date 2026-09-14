@@ -1,3 +1,10 @@
+## [1.1.1-beta.1](https://github.com/QuartzBrowser/Quartz/compare/v1.1.0...v1.1.1-beta.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **webkit:** publish engine 4a523b0b3d1d ([ac1bb3e](https://github.com/QuartzBrowser/Quartz/commit/ac1bb3ebae009e25ca71fed612113c0c9ee316d4))
+
 # [1.1.0](https://github.com/QuartzBrowser/Quartz/compare/v1.0.1...v1.1.0) (2026-09-14)
 
 

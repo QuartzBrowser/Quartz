@@ -1,5 +1,5 @@
 module.exports = {
-  branches: ["main"],
+  branches: ["main", { name: "beta", prerelease: true }],
   repositoryUrl: "https://github.com/QuartzBrowser/Quartz.git",
   tagFormat: "v${version}",
   plugins: [

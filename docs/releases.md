@@ -22,16 +22,18 @@ and the update feed derive their minimum OS from the built engine.
 | --- | --- | --- |
 | `SIGN_IDENTITY` | `-` | Ad-hoc signing; set a Developer ID Application identity for the optional notarized build. |
 | `ZIP_APP` | `0` | Set to `1` to create `Quartz.zip` alongside the app. |
-| `VERSION` | Contents of `version.txt` | `CFBundleShortVersionString`; numeric `major.minor.patch`. |
-| `BUILD_NUMBER` | `VERSION` | `CFBundleVersion`; one to three dot-separated numeric components. |
+| `VERSION` | Contents of `version.txt` | Full release label: `X.Y.Z` or `X.Y.Z-beta.N`; packaging derives numeric macOS fields. |
+| `BUILD_NUMBER` | Derived by `release-version.py` | Numeric `CFBundleVersion`; omit overrides, or use the exact derived mapping. |
 | `CONFIGURATION` | `release` | Swift build configuration. |
 | `DIST_DIR` | Repository `dist/` | App and optional ZIP output directory. |
 | `QUARTZ_WEBKIT_PRODUCTS_DIR` | `.build/quartz-webkit/products/Release` | Verified universal products from the locked QuartzBrowser WebKit fork. |
 | `SPARKLE_PUBLIC_KEY` | Unset | Existing base64 Ed25519 public key for updater-enabled packages. Without it, in-app updates are unavailable. |
-| `SPARKLE_FEED_URL` | Canonical GitHub latest `appcast.xml` URL | HTTPS feed location; see [update setup](UPDATES.md). |
+| `SPARKLE_FEED_URL` | Canonical raw GitHub `update-feed/appcast.xml` URL | Shared signed stable/beta feed; see [update setup](UPDATES.md). |
 
 Keep the bundle ID (`org.quartzbrowser.Quartz`), update public key, and version
-ordering consistent for public upgrades. The package script also supports
+ordering consistent for public upgrades. The [version mapping](BETA_UPDATES.md#version-labels-and-ordering)
+keeps full beta labels separate from numeric `CFBundleShortVersionString` and
+`CFBundleVersion`; stable ordinal 99 follows beta ordinals 1–98. The package script also supports
 `PRODUCT_NAME`, `BUNDLE_ID`, and `SPARKLE_FRAMEWORK` overrides; normal Quartz
 releases use their defaults.
 
@@ -126,12 +128,13 @@ xcrun notarytool store-credentials quartz-notary
 
 - [ ] Replace the example identity with your actual Developer ID Application
   identity and build. `VERSION` and `BUILD_NUMBER` below use the repository version;
-  change both when rehearsing a planned release:
+  change `VERSION` when rehearsing a planned release; let packaging derive the
+  build number:
 
 ```sh
 QUARTZ_RELEASE_DIST="$(mktemp -d -t quartz-developer-id)"
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-  VERSION="$(cat version.txt)" BUILD_NUMBER="$(cat version.txt)" \
+  VERSION="$(cat version.txt)" \
   DIST_DIR="$QUARTZ_RELEASE_DIST" ZIP_APP=1 Scripts/package-macos-app.sh
 codesign --verify --deep --strict --verbose=2 "$QUARTZ_RELEASE_DIST/Quartz.app"
 codesign --display --verbose=4 "$QUARTZ_RELEASE_DIST/Quartz.app"
@@ -210,48 +213,41 @@ exercise the stapled ticket. Do not remove quarantine for this verification.
 ## Automated release boundary
 
 Releases are explicitly requested through **Quartz > Actions > release > Run
-workflow**, selecting branch **main**. [The release workflow](../.github/workflows/release.yml)
-has no push or scheduled trigger. Ordinary Quartz `main` pushes and pull requests
-still run the [build workflow](../.github/workflows/build.yml) without publication.
-Conventional Commits accumulated on Quartz `main` determine the next version via
-`release.config.cjs` once a maintainer requests a release.
+workflow**. Select application branch **main** for stable or **beta** for a beta
+prerelease. [The release workflow](../.github/workflows/release.yml) has no push
+or scheduled trigger. Quartz PR/main/beta CI remains automatic without publication.
+[release.config.cjs](../release.config.cjs) derives the next stable or prerelease
+version from the selected branch's Conventional Commit history.
 
-Leave `engine_revision` empty to preserve the committed
-[`WebKit.lock.json`](../WebKit.lock.json) pin. To ship an engine batch, supply its
-exact full lowercase SHA: it must descend from the current pin and be reachable
-from [`QuartzBrowser/WebKit`'s `main`](https://github.com/QuartzBrowser/WebKit/tree/main).
-The workflow does not automatically select that branch's latest commit. Develop
-and integrate engine changes on `quartz-dev`, test a candidate through Quartz's
-manual `build` input, and promote the tested SHA to fork `main` before selecting
-it for release. See the [maintenance manual](WEBKIT_MAINTENANCE.md) for the complete
-procedure and copyable commands.
+Leave `engine_revision` empty to retain that branch's committed
+[`WebKit.lock.json`](../WebKit.lock.json) pin, or supply its exact forward
+40-character lowercase SHA. Stable always checks membership in fork `main`;
+beta always checks membership in fork `quartz-dev`, including for a retained pin.
+No engine tip is selected automatically. Review the
+[engine procedure](WEBKIT_MAINTENANCE.md) and [beta/stable promotion workflow](BETA_UPDATES.md).
 
-The serialized release job snapshots Quartz's application revision at dispatch,
-selects Xcode 26.6 on the configured macOS 26 runner, restores verified products
-from an exact engine/toolchain cache key or builds the candidate fork, and runs
-the tests, packaging/runtime, and updater checks. It commits a validated engine
-pin with a `fix(webkit)` Conventional Commit after the pre-commit gates pass and
-only if Quartz main still matches the plan. It then runs semantic-release in the
-same job, prepares a universal ad-hoc app with the engine embedded, signs the
-frozen ZIP and appcast with the existing Sparkle key, publishes them with
-`SHA256SUMS`, and verifies fresh public downloads. Engine-only updates cause patch
-releases; pending Quartz changes can raise the version further. A manual request
-with no releasable changes can complete without a new version.
+The serialized job snapshots the selected application's revision at dispatch,
+selects Xcode 26.6 on the configured macOS 26 runner, restores exact verified
+engine products or builds them, and runs tests, packaging/runtime, and updater
+checks. The pin commit gate refuses application-branch movement during validation.
+semantic-release then packages and signs the release, publishes versioned GitHub
+assets, and verifies their public downloads before activating the permanent feed.
+Engine-only batches use `fix(webkit)`; the selected channel and pending app history
+determine the label. A request with no releasable changes can finish without a
+new version.
 
-A pre-commit candidate build or validation failure leaves the committed pin
-unchanged. A failure later in the publication sequence may leave a committed pin,
-tag, draft, or published release; inspect the failed step and actual repository
-state before retrying. A new manual release can add an empty `fix(webkit)` commit
-when the latest published release still lacks the committed engine revision.
-There is no scheduled retry. If Quartz main moved during validation, dispatch a
-fresh run against the reviewed new application tree. If publication succeeded
-but the public-download audit failed, use `verify_version` as described below.
+A pre-commit build/validation failure leaves the pin unchanged. Later failures
+can leave a pin, tag, draft, assets, or a public release; inspect the exact stage.
+Engine publication retries compare with the selected channel's published pin.
+Feed activation is a separate stage after publication and needs its own explicit
+recovery when incomplete. There is no scheduled retry, and rerunning a historical
+workflow uses historical source. Start a fresh dispatch against the reviewed
+current release branch.
 
-The workflow reads the public fork and publishing uses Quartz's existing
-`GITHUB_TOKEN` and Sparkle key; no new cross-repository credential is required.
-Engine selection and publication run in the same workflow. See
-[release planning and recovery](WEBKIT_MAINTENANCE.md#release-planning-and-failure-recovery)
-for the exact selection, mutation, and failure boundaries.
+The release reads the public engine fork and uses Quartz's existing token and
+Sparkle key configuration. No cross-repository token or website hosting is added.
+The [recovery matrix](BETA_UPDATES.md#inspect-and-recover-a-release) identifies the
+mutation and verification boundaries for every failure stage.
 
 System-WebKit development mode is rejected by normal release preparation. The
 updater test script's `QUARTZ_TEST_SYSTEM_RELEASE=1` exception is only for
@@ -260,24 +256,48 @@ An uncached fork build can be lengthy. A workflow definition or a successful
 fixture test is not evidence of a completed engine build or published release;
 record actual hosted and packaged runtime results before release approval.
 
-The version-specific downloads must match the prepared release assets exactly.
-The public `releases/latest/download/appcast.xml` route can briefly serve the
-previous feed after publication, so verification retries that exact URL up to
-12 times, waiting 10 seconds between attempts. It succeeds only when the feed
-matches the version-specific appcast byte for byte. Persistent mismatches and
-download failures still fail the job. `Scripts/test-published-feed.sh` checks
-propagation, download failures, and retry exhaustion without network access.
+### Public assets and active feed
 
-If publication succeeds but public verification fails, use **Actions > release >
-Run workflow** and set `verify_version` to the published version (for example,
-`0.14.0`). This runs a read-only verification job: it obtains reference assets
-through the GitHub API, downloads them again through the public URLs, and checks
-checksums, the latest-feed route, application signatures, version, and update
-archive signature. It does not rebuild, replace, or publish release assets.
-The requested version must still be the latest release. Leave `engine_revision`
-empty for this recheck; supplying both inputs is rejected. Leave `verify_version`
-empty for a normal release run. Simply rerunning the original release job can
-skip public verification when semantic-release finds no new version to publish.
+The version-specific ZIP, appcast, and checksums must match the prepared bytes
+exactly. The immutable-assets audit requires the configured `SPARKLE_PUBLIC_KEY`
+and authenticates the signed feed/archive before extracting the ZIP. It then
+checks extracted-app code signing, the embedded key, full label/base/build/channel
+metadata, and download URL. It does not launch the engine again or exercise a user's install;
+those require the separate packaging/runtime and installation checks.
+
+Only after those checks pass does `publish-update-feed.py` activate the already
+signed appcast on the `update-feed` branch. It verifies with the configured public
+key, requires exact equality with the release's uploaded appcast, preserves all
+previously advertised items, and uses an ordinary forward push. It needs no
+private signing key. Raw GitHub serves the
+[canonical signed feed](https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml);
+there is no GitHub Pages deployment.
+
+For a local audit, supply the public repository variable as shown in
+[the public-audit example](BETA_UPDATES.md#run-a-public-audit-locally); no private
+signing key is needed. The final `--feed` audit always verifies the canonical URL and, for old apps that
+embed the legacy latest-stable URL, also verifies that legacy route. It requires
+the same immutable release item in a signed response, allowing a newer combined
+feed to retain older releases. Default propagation polling is 36 attempts with
+10 seconds between attempts; request timeouts add to elapsed time. Persistent
+network, signature, or item mismatches fail the job. Seed the canonical signed
+feed before using the new audit on historical releases.
+
+### Read-only verification and explicit activation recovery
+
+Use **Run workflow** with `verify_version` to inspect an existing release and
+its advertised item without modifying assets or feeds. Use `activate_version`
+only to recover activation of an already published signed appcast after the
+public assets pass verification. Stable labels require `main`; labels such as
+`1.1.0-beta.2` require `beta`. Version inputs omit `v`. At most one of
+`engine_revision`, `verify_version`, and `activate_version` may be nonempty.
+
+An older version can be verified after a newer release when its item remains
+unchanged. An older appcast snapshot cannot be activated if it would remove or
+change any current feed item. Preserve newer history; verify an already retained
+item or prepare a fresh release against the current feed when needed. Do not
+force-push the feed or replace signed release bytes. See the
+[copyable commands and failure matrix](BETA_UPDATES.md#inspect-and-recover-a-release).
 
 - [ ] Run `Scripts/test-update-packaging.sh` for changes to that pipeline; it uses
   disposable update keys. See [update setup](UPDATES.md) for production key setup.

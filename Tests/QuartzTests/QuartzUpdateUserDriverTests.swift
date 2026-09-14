@@ -4,6 +4,224 @@ import XCTest
 
 @MainActor
 final class QuartzUpdateUserDriverTests: XCTestCase {
+    func testStableDeclinesLateBetaOfferWithoutShowingOrInstallingIt() {
+        let fixture = UpdateDriverFixture()
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") {
+            replies.append($0)
+        }
+        fixture.driver.installUpdate()
+        XCTAssertEqual(replies, [.skip])
+        XCTAssertEqual(fixture.driver.state, .idle)
+        XCTAssertFalse(fixture.states.contains(.available(version: "1.1.0-beta.1")))
+    }
+
+    func testOptOutRevokesPendingBetaOfferAndRequiresANewCycleAfterOptingBackIn() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") {
+            replies.append($0)
+        }
+        fixture.channel = .stable
+        fixture.driver.updateChannelDidChange()
+        fixture.channel = .beta
+        fixture.driver.updateChannelDidChange()
+        fixture.driver.installUpdate()
+        XCTAssertEqual(replies, [.skip])
+        XCTAssertEqual(fixture.driver.state, .idle)
+
+        var lateReplies: [SPUUserUpdateChoice] = []
+        fixture.driver.showReady(toInstallAndRelaunch: { lateReplies.append($0) })
+        XCTAssertEqual(lateReplies, [.skip])
+        XCTAssertTrue(fixture.driver.updateCycleDidFinish())
+        fixture.driver.offerUpdate(version: "1.1.0-beta.2", informationOnly: false, informationURL: nil, channel: "beta") {
+            replies.append($0)
+        }
+        XCTAssertEqual(fixture.driver.state, .available(version: "1.1.0-beta.2"))
+        XCTAssertEqual(replies, [.skip], "A new offer must still wait for installation consent.")
+    }
+
+    func testOptOutCancelsBetaDownloadAndLateCallbacksCannotRestoreConsent() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        var installReplies: [SPUUserUpdateChoice] = []
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") {
+            installReplies.append($0)
+        }
+        fixture.driver.installUpdate()
+        var cancellations = 0
+        fixture.driver.showDownloadInitiated(cancellation: { cancellations += 1 })
+        fixture.channel = .stable
+        fixture.driver.updateChannelDidChange()
+        fixture.driver.updateChannelDidChange()
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(installReplies, [.install])
+        fixture.driver.showDownloadDidReceiveExpectedContentLength(100)
+        fixture.driver.showDownloadDidReceiveData(ofLength: 50)
+        fixture.driver.showDownloadDidStartExtractingUpdate()
+        fixture.driver.showExtractionReceivedProgress(1)
+        var readyReplies: [SPUUserUpdateChoice] = []
+        fixture.driver.showReady(toInstallAndRelaunch: { readyReplies.append($0) })
+        XCTAssertEqual(readyReplies, [.skip], "Dismiss could leave a prepared beta installing on quit.")
+        XCTAssertEqual(fixture.driver.state, .idle)
+        XCTAssertFalse(fixture.driver.canCancel)
+    }
+
+    func testOptOutBetweenInstallChoiceAndDownloadStartCancelsWhenHandlerArrives() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") { _ in }
+        fixture.driver.installUpdate()
+        fixture.channel = .stable
+        fixture.driver.updateChannelDidChange()
+        var cancellations = 0
+        fixture.driver.showDownloadInitiated(cancellation: { cancellations += 1 })
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(fixture.driver.state, .idle)
+    }
+
+    func testInstallRechecksChannelEvenIfPreferenceChangesOutsideTheMenu() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") { replies.append($0) }
+        fixture.channel = .stable
+        fixture.driver.installUpdate()
+        XCTAssertEqual(replies, [.skip])
+        XCTAssertEqual(fixture.driver.state, .idle)
+    }
+
+    func testChannelChangeWhilePublishingDownloadStateCannotSendInstallChoice() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") { replies.append($0) }
+        fixture.onStateChange = { [unowned fixture] state in
+            if case .downloading = state {
+                fixture.channel = .stable
+                fixture.driver.updateChannelDidChange()
+            }
+        }
+        fixture.driver.installUpdate()
+        XCTAssertEqual(replies, [.skip])
+        XCTAssertEqual(fixture.driver.state, .idle)
+    }
+
+    func testCycleCompletionRemembersRevocationAfterSparkleDismissesTheOldSession() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") { _ in }
+        fixture.channel = .stable
+        fixture.driver.updateChannelDidChange()
+        fixture.driver.manualCheckRequestedDuringBackgroundCheck()
+        fixture.driver.dismissUpdateInstallation()
+        XCTAssertTrue(fixture.driver.updateCycleDidFinish(), "The controller must retry a manual check requested while the revoked cycle was still ending.")
+        XCTAssertFalse(fixture.driver.updateCycleDidFinish())
+    }
+
+    func testReadyToInstallRechecksAChannelChangeDuringStatePublication() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") { _ in }
+        fixture.driver.installUpdate()
+        fixture.onStateChange = { [unowned fixture] state in
+            if state == .installing {
+                fixture.channel = .stable
+                fixture.driver.updateChannelDidChange()
+            }
+        }
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.showReady(toInstallAndRelaunch: { replies.append($0) })
+        XCTAssertEqual(replies, [.skip])
+        XCTAssertEqual(fixture.driver.state, .idle)
+    }
+
+    func testOptOutPreservesAnAllowedStableOffer() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.offerUpdate(version: "1.1.0", informationOnly: false, informationURL: nil) { replies.append($0) }
+        fixture.channel = .stable
+        fixture.driver.updateChannelDidChange()
+        XCTAssertEqual(fixture.driver.state, .available(version: "1.1.0"))
+        XCTAssertTrue(replies.isEmpty)
+        fixture.driver.installUpdate()
+        XCTAssertEqual(replies, [.install])
+    }
+
+    func testExcludedOfferRequestsFreshCheckToClearSparklesSkipThreshold() {
+        let fixture = UpdateDriverFixture()
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") {
+            replies.append($0)
+        }
+        XCTAssertEqual(replies, [.skip])
+        XCTAssertTrue(fixture.driver.needsFreshChannelCheck)
+        fixture.driver.updateCycleDidFinish()
+        XCTAssertFalse(fixture.driver.needsFreshChannelCheck)
+    }
+
+    func testChannelChangeIsUnavailableDuringNoncancellableInstallationPhases() {
+        let fixture = UpdateDriverFixture()
+        XCTAssertTrue(fixture.driver.canChangeUpdateChannel)
+        fixture.driver.showDownloadInitiated(cancellation: {})
+        XCTAssertTrue(fixture.driver.canChangeUpdateChannel)
+        fixture.driver.showDownloadDidStartExtractingUpdate()
+        XCTAssertFalse(fixture.driver.canChangeUpdateChannel)
+        fixture.driver.showInstallingUpdate(withApplicationTerminated: false, retryTerminatingApplication: {})
+        XCTAssertFalse(fixture.driver.canChangeUpdateChannel)
+        fixture.driver.dismissUpdateInstallation()
+        XCTAssertTrue(fixture.driver.canChangeUpdateChannel)
+    }
+
+    func testExcludedPreparedBetaUsesSkipWhenChannelChanges() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") { _ in }
+        var replies: [SPUUserUpdateChoice] = []
+        fixture.driver.showReady(toInstallAndRelaunch: { replies.append($0) })
+        fixture.channel = .stable
+        fixture.driver.updateChannelDidChange()
+        XCTAssertEqual(replies, [.skip])
+        fixture.driver.installUpdate()
+        XCTAssertEqual(replies, [.skip])
+        XCTAssertFalse(fixture.driver.needsFreshChannelCheck, "Skipping at the ready callback cancels without recording a skipped version.")
+    }
+
+    func testInternalChannelRefreshAcknowledgesEmptyResultWithoutAnAlert() {
+        let fixture = UpdateDriverFixture()
+        fixture.driver.beginChannelRefreshCheck()
+        fixture.driver.showUserInitiatedUpdateCheck(cancellation: {})
+        var acknowledgements = 0
+        fixture.driver.showUpdateNotFoundWithError(NSError(domain: "test", code: 1), acknowledgement: { acknowledgements += 1 })
+        XCTAssertEqual(acknowledgements, 1)
+        XCTAssertTrue(fixture.messages.isEmpty)
+        XCTAssertEqual(fixture.driver.state, .idle)
+    }
+
+    func testUserCanRequestTheResultOfAnInternalChannelRefresh() {
+        let fixture = UpdateDriverFixture()
+        fixture.driver.beginChannelRefreshCheck()
+        fixture.driver.showUserInitiatedUpdateCheck(cancellation: {})
+        fixture.driver.showUpdateInFocus()
+        fixture.driver.showUpdateNotFoundWithError(NSError(domain: "test", code: 1), acknowledgement: {})
+        XCTAssertEqual(fixture.messages.last?.title, "No Update Available")
+    }
+
+    func testRevokedCycleErrorsAreAcknowledgedWithoutRevivingAnUpdateAlert() {
+        let fixture = UpdateDriverFixture()
+        fixture.channel = .beta
+        fixture.driver.offerUpdate(version: "1.1.0-beta.1", informationOnly: false, informationURL: nil, channel: "beta") { _ in }
+        fixture.channel = .stable
+        fixture.driver.updateChannelDidChange()
+        var acknowledgements = 0
+        fixture.driver.showUpdaterError(NSError(domain: "test", code: 1), acknowledgement: { acknowledgements += 1 })
+        XCTAssertEqual(acknowledgements, 1)
+        XCTAssertTrue(fixture.messages.isEmpty)
+        XCTAssertEqual(fixture.driver.state, .idle)
+    }
+
     func testOneUpdateClickDownloadsAndInstallsWithoutAnotherConfirmation() {
         let fixture = UpdateDriverFixture()
         let driver = fixture.driver
@@ -406,12 +624,18 @@ private final class UpdateDriverFixture {
     }
 
     var automaticChecks = true
+    var channel: QuartzUpdateChannel = .stable
     var states: [QuartzUpdateState] = []
     var messages: [Message] = []
     var openedURLs: [URL] = []
+    var onStateChange: ((QuartzUpdateState) -> Void)?
     lazy var driver = QuartzUpdateUserDriver(
         automaticallyChecksForUpdates: { [unowned self] in self.automaticChecks },
-        stateChanged: { [unowned self] in self.states.append($0) },
+        isUpdateChannelAllowed: { [unowned self] in self.channel.allows($0) },
+        stateChanged: { [unowned self] in
+            self.states.append($0)
+            self.onStateChange?($0)
+        },
         presentMessage: { [unowned self] in self.messages.append(Message(title: $0, text: $1, acknowledgement: $2)) },
         openInformationURL: { [unowned self] in self.openedURLs.append($0) }
     )

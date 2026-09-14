@@ -7,10 +7,8 @@ if [[ "${QUARTZ_USE_SYSTEM_WEBKIT:-0}" == 1 && "${QUARTZ_TEST_SYSTEM_RELEASE:-0}
     echo "error: public releases require the pinned Quartz WebKit fork; see docs/WEBKIT.md" >&2
     exit 1
 fi
-if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "error: release version must be a numeric major.minor.patch" >&2
-    exit 1
-fi
+BUILD_NUMBER="$(python3 "${ROOT_DIR}/Scripts/release-version.py" "${VERSION}" --field build_version)"
+RELEASE_CHANNEL="$(python3 "${ROOT_DIR}/Scripts/release-version.py" "${VERSION}" --field channel)"
 if [[ -z "${SPARKLE_PRIVATE_KEY:-}" || -z "${SPARKLE_PUBLIC_KEY:-}" ]]; then
     echo "error: releases require SPARKLE_PRIVATE_KEY and SPARKLE_PUBLIC_KEY; see docs/UPDATES.md" >&2
     exit 1
@@ -24,14 +22,15 @@ DIST_DIR="$(cd "${DIST_DIR}" && pwd)"
 RELEASE_DIR="${DIST_DIR}/release"
 BUNDLE_DIR="${DIST_DIR}/release-bundle"
 SPARKLE_TOOLS_DIR="${SPARKLE_TOOLS_DIR:-${ROOT_DIR}/.build/artifacts/sparkle/Sparkle/bin}"
-FEED_URL="https://github.com/QuartzBrowser/Quartz/releases/latest/download/appcast.xml"
+FEED_URL="https://raw.githubusercontent.com/QuartzBrowser/Quartz/update-feed/appcast.xml"
+LEGACY_FEED_URL="https://github.com/QuartzBrowser/Quartz/releases/latest/download/appcast.xml"
 DOWNLOAD_PREFIX="https://github.com/QuartzBrowser/Quartz/releases/download/v${VERSION}/"
 ARCHIVE_NAME="Quartz-v${VERSION}-macos-universal.zip"
 umask 022
 cd "${ROOT_DIR}"
 rm -rf "${RELEASE_DIR}"
 mkdir -p "${RELEASE_DIR}"
-VERSION="${VERSION}" BUILD_NUMBER="${VERSION}" DIST_DIR="${BUNDLE_DIR}" ZIP_APP=0 \
+VERSION="${VERSION}" BUILD_NUMBER="${BUILD_NUMBER}" DIST_DIR="${BUNDLE_DIR}" ZIP_APP=0 \
     QUARTZ_APP_ARCHS="arm64 x86_64" \
     SPARKLE_FEED_URL="${FEED_URL}" SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY}" \
     SIGN_IDENTITY="-" \
@@ -49,8 +48,9 @@ codesign --verify --deep --strict "${APP}"
 ditto -c -k --norsrc --keepParent "${APP}" "${RELEASE_DIR}/${ARCHIVE_NAME}"
 unzip -tq "${RELEASE_DIR}/${ARCHIVE_NAME}"
 
-# Retain older compatible releases (for example when the minimum macOS version
-# changes). A missing feed is permitted only for the first updater release.
+# Retain stable and beta history from the permanent feed. Only a canonical 404
+# permits the one-time legacy stable-feed migration; network/signature errors
+# must never silently discard a channel's history.
 if [[ -n "${PREVIOUS_APPCAST_FILE:-}" ]]; then
     cp "${PREVIOUS_APPCAST_FILE}" "${RELEASE_DIR}/appcast.xml"
 else
@@ -58,17 +58,34 @@ else
         --output "${RELEASE_DIR}/appcast.xml" --write-out '%{http_code}' "${FEED_URL}")"
     case "${HTTP_STATUS}" in
         200) ;;
-        404) rm "${RELEASE_DIR}/appcast.xml" ;;
+        404)
+            HTTP_STATUS="$(curl --silent --show-error --location --retry 3 --connect-timeout 20 --max-time 120 \
+                --output "${RELEASE_DIR}/appcast.xml" --write-out '%{http_code}' "${LEGACY_FEED_URL}")"
+            case "${HTTP_STATUS}" in
+                200) ;;
+                404) rm "${RELEASE_DIR}/appcast.xml" ;;
+                *) echo "error: could not retrieve the legacy stable appcast (HTTP ${HTTP_STATUS})" >&2; exit 1 ;;
+            esac ;;
         *) echo "error: could not retrieve the previous appcast (HTTP ${HTTP_STATUS})" >&2; exit 1 ;;
     esac
 fi
+FINALIZE_ARGS=("${VERSION}" --appcast "${RELEASE_DIR}/appcast.xml" --download-url "${DOWNLOAD_PREFIX}${ARCHIVE_NAME}")
 if [[ -f "${RELEASE_DIR}/appcast.xml" ]]; then
     printf '%s' "${UPDATE_PRIVATE_KEY}" | "${SPARKLE_TOOLS_DIR}/sign_update" --verify --ed-key-file - "${RELEASE_DIR}/appcast.xml"
+    swift "${ROOT_DIR}/Scripts/verify-feed.swift" "${RELEASE_DIR}/appcast.xml" "${SPARKLE_PUBLIC_KEY}"
+    cp "${RELEASE_DIR}/appcast.xml" "${DIST_DIR}/previous-appcast.xml"
+    FINALIZE_ARGS+=(--previous-appcast "${DIST_DIR}/previous-appcast.xml")
 fi
-printf '%s' "${UPDATE_PRIVATE_KEY}" | "${SPARKLE_TOOLS_DIR}/generate_appcast" --ed-key-file - \
-    --download-url-prefix "${DOWNLOAD_PREFIX}" --maximum-deltas 0 --maximum-versions 3 \
-    --link "https://github.com/QuartzBrowser/Quartz/releases/tag/v${VERSION}" \
-    "${RELEASE_DIR}"
+APPCAST_ARGS=(--ed-key-file - --download-url-prefix "${DOWNLOAD_PREFIX}" --maximum-deltas 0 --maximum-versions 0
+    --versions "${BUILD_NUMBER}" --link "https://github.com/QuartzBrowser/Quartz/releases/tag/v${VERSION}")
+if [[ "${RELEASE_CHANNEL}" == beta ]]; then
+    APPCAST_ARGS+=(--channel beta)
+fi
+printf '%s' "${UPDATE_PRIVATE_KEY}" | "${SPARKLE_TOOLS_DIR}/generate_appcast" "${APPCAST_ARGS[@]}" "${RELEASE_DIR}"
+# CFBundleShortVersionString stays numeric in the app. Display the complete beta
+# label in this exact item, preserving all prior signed enclosure metadata.
+python3 "${ROOT_DIR}/Scripts/release-appcast.py" "${FINALIZE_ARGS[@]}"
+printf '%s' "${UPDATE_PRIVATE_KEY}" | "${SPARKLE_TOOLS_DIR}/sign_update" --ed-key-file - "${RELEASE_DIR}/appcast.xml"
 printf '%s' "${UPDATE_PRIVATE_KEY}" | "${SPARKLE_TOOLS_DIR}/sign_update" --verify --ed-key-file - "${RELEASE_DIR}/appcast.xml"
 unset UPDATE_PRIVATE_KEY
 swift "${ROOT_DIR}/Scripts/verify-update.swift" "${APP}" "${RELEASE_DIR}/${ARCHIVE_NAME}" \

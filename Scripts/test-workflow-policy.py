@@ -7,6 +7,7 @@ executed directly from its workflow, so its rejection behavior is also covered.
 """
 
 import ast
+import json
 import os
 from pathlib import Path
 import re
@@ -65,10 +66,10 @@ def condition(expression, context):
     return bool(evaluate(ast.parse(expression, mode="eval").body))
 
 
-def request(event="workflow_dispatch", ref="refs/heads/main", engine="", verify=""):
+def request(event="workflow_dispatch", ref="refs/heads/main", engine="", verify="", activate=""):
     return {
         "github": {"event_name": event, "ref": ref, "sha": REVISION},
-        "inputs": {"engine_revision": engine, "verify_version": verify},
+        "inputs": {"engine_revision": engine, "verify_version": verify, "activate_version": activate},
     }
 
 
@@ -98,13 +99,14 @@ class WorkflowPolicyTests(unittest.TestCase):
     def test_publication_has_only_an_explicit_manual_entrypoint(self):
         self.assertEqual(set(self.release["on"]), {"workflow_dispatch"})
         inputs = self.release["on"]["workflow_dispatch"]["inputs"]
-        for name in ("engine_revision", "verify_version"):
+        for name in ("engine_revision", "verify_version", "activate_version"):
             self.assertEqual(inputs[name]["type"], "string")
             self.assertEqual(inputs[name].get("default", ""), "")
             self.assertEqual(inputs[name].get("required", "false"), "false")
 
     def test_normal_development_keeps_automatic_read_only_ci(self):
         self.assertEqual(set(self.build["on"]), {"push", "pull_request", "workflow_dispatch"})
+        self.assertEqual(set(self.build["on"]["push"]["branches"]), {"main", "beta"})
         self.assertEqual(self.build["permissions"], {"contents": "read"})
         for job in self.build["jobs"].values():
             self.assertNotIn("write", job.get("permissions", {}).values())
@@ -118,12 +120,14 @@ class WorkflowPolicyTests(unittest.TestCase):
                 self.assertEqual(step.get("with", {}).get("persist-credentials"), "false")
         self.assertNotRegex(str(self.build), r"\$\{\{\s*secrets\.")
 
-    def test_only_the_publisher_receives_repository_write_permissions(self):
+    def test_only_publication_and_explicit_feed_activation_receive_write_permissions(self):
         self.assertEqual(self.release["permissions"], {"contents": "read"})
         for name, job in self.release["jobs"].items():
             permissions = job.get("permissions", self.release["permissions"])
-            if name == "release":
+            if name in ("release", "activate-published-feed"):
                 self.assertEqual(permissions.get("contents"), "write")
+                if name == "activate-published-feed":
+                    self.assertEqual(permissions, {"contents": "write"})
             else:
                 self.assertNotIn("write", permissions.values(), name)
                 for step in job.get("steps", []):
@@ -141,7 +145,7 @@ class WorkflowPolicyTests(unittest.TestCase):
     def test_release_and_verification_wait_for_request_validation(self):
         jobs = self.release["jobs"]
         self.assertIn("validate-request", jobs)
-        for name in ("engine-update", "verify-published-release"):
+        for name in ("engine-update", "verify-published-release", "activate-published-feed"):
             dependencies = jobs[name].get("needs", [])
             if isinstance(dependencies, str):
                 dependencies = [dependencies]
@@ -152,16 +156,49 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("engine-update", dependencies)
 
     def test_verification_cannot_enter_the_publishing_jobs(self):
-        for name in ("engine-update", "release", "verify-published-release"):
+        for name in ("engine-update", "release", "verify-published-release", "activate-published-feed"):
             expression = self.release["jobs"][name].get("if")
             for event in ("workflow_dispatch", "push", "pull_request", "schedule"):
-                for ref in ("refs/heads/main", "refs/heads/feature"):
+                for ref in ("refs/heads/main", "refs/heads/beta", "refs/heads/feature"):
                     for verify in ("", "1.2.3"):
                         for engine in ("", REVISION):
-                            expected = event == "workflow_dispatch" and ref == "refs/heads/main"
-                            expected = expected and (bool(verify) if name == "verify-published-release" else not verify)
-                            with self.subTest(job=name, event=event, ref=ref, verify=verify, engine=engine):
-                                self.assertEqual(condition(expression, request(event, ref, engine, verify)), expected)
+                            for activate in ("", "1.2.3"):
+                                expected = event == "workflow_dispatch" and ref in ("refs/heads/main", "refs/heads/beta")
+                                if name == "verify-published-release":
+                                    expected = expected and bool(verify) and not activate
+                                elif name == "activate-published-feed":
+                                    expected = expected and bool(activate) and not verify
+                                else:
+                                    expected = expected and not verify and not activate
+                                with self.subTest(job=name, event=event, ref=ref, verify=verify, engine=engine, activate=activate):
+                                    self.assertEqual(condition(expression, request(event, ref, engine, verify, activate)), expected)
+
+    def test_stable_beta_and_feed_recovery_share_one_publication_queue(self):
+        self.assertEqual(self.release["concurrency"]["group"], "quartz-release")
+        self.assertEqual(self.release["concurrency"]["cancel-in-progress"], "false")
+        for job in self.release["jobs"].values():
+            self.assertNotIn("concurrency", job)
+
+    def test_semantic_release_treats_beta_as_a_prerelease_channel(self):
+        result = subprocess.run(["node", "-e", "process.stdout.write(JSON.stringify(require('./release.config.cjs').branches))"],
+                                cwd=ROOT, text=True, capture_output=True, check=True, timeout=10)
+        self.assertEqual(json.loads(result.stdout), ["main", {"name": "beta", "prerelease": True}])
+
+    def test_feed_activation_requires_immutable_verification_and_then_feed_verification(self):
+        for name in ("release", "activate-published-feed"):
+            job_steps = self.release["jobs"][name]["steps"]
+            publications = [index for index, step in enumerate(job_steps) if "Scripts/publish-update-feed.py" in step.get("run", "")]
+            self.assertEqual(len(publications), 1)
+            publication = publications[0]
+            immutable = [index for index, step in enumerate(job_steps) if "Scripts/verify-published-update.sh" in step.get("run", "")
+                         and "--feed" not in step["run"]]
+            active_feed = [index for index, step in enumerate(job_steps) if "Scripts/verify-published-update.sh" in step.get("run", "")
+                           and "--feed" in step["run"]]
+            self.assertTrue(any(index < publication for index in immutable))
+            self.assertTrue(any(index > publication for index in active_feed))
+        verifier = self.release["jobs"]["verify-published-release"]
+        self.assertNotIn("Scripts/publish-update-feed.py", str(verifier))
+        self.assertNotIn("SPARKLE_PRIVATE_KEY", str(self.release["jobs"]["activate-published-feed"]))
 
     def test_candidate_builds_require_an_explicit_manual_input(self):
         candidate = step_with_id(self.build, "stage-engine-candidate")
@@ -194,30 +231,48 @@ class WorkflowPolicyTests(unittest.TestCase):
         validator = step_with_id(self.release, "validate-inputs")
         script = validator["run"]
         cases = [
-            ("refs/heads/main", "", "", True),
-            ("refs/heads/main", REVISION, "", True),
-            ("refs/heads/main", "", "1.2.3", True),
-            ("refs/heads/main", REVISION, "1.2.3", False),
-            ("refs/heads/feature", "", "", False),
-            ("refs/tags/v1.2.3", "", "", False),
-            ("refs/heads/main", "main", "", False),
-            ("refs/heads/main", REVISION[:12], "", False),
-            ("refs/heads/main", "g" * 40, "", False),
-            ("refs/heads/main", REVISION.upper(), "", False),
-            ("refs/heads/main", "", "v1.2.3", False),
-            ("refs/heads/main", "", "1.2", False),
-            ("refs/heads/main", "", "1.2.3\n4.5.6", False),
+            ("main", "", "", "", True),
+            ("main", REVISION, "", "", True),
+            ("main", "", "1.2.3", "", True),
+            ("main", "", "", "1.2.3", True),
+            ("beta", "", "", "", True),
+            ("beta", REVISION, "", "", True),
+            ("beta", "", "1.2.3-beta.1", "", True),
+            ("beta", "", "", "1.2.3-beta.98", True),
+            ("main", REVISION, "1.2.3", "", False),
+            ("main", REVISION, "", "1.2.3", False),
+            ("main", "", "1.2.3", "1.2.3", False),
+            ("main", REVISION, "1.2.3", "1.2.3", False),
+            ("feature", "", "", "", False),
+            ("main", "main", "", "", False),
+            ("main", REVISION[:12], "", "", False),
+            ("main", "g" * 40, "", "", False),
+            ("main", REVISION.upper(), "", "", False),
+            ("main", "", "v1.2.3", "", False),
+            ("main", "", "1.2", "", False),
+            ("main", "", "1.2.3\n4.5.6", "", False),
+            ("main", "", "1.2.3-beta.1", "", False),
+            ("main", "", "", "1.2.3-beta.1", False),
+            ("beta", "", "1.2.3", "", False),
+            ("beta", "", "", "1.2.3", False),
+            ("beta", "", "1.2.3-beta.0", "", False),
+            ("beta", "", "", "1.2.3-beta.99", False),
         ]
         with tempfile.TemporaryDirectory(prefix="quartz-workflow-inputs-") as directory:
-            for ref, engine, verify, accepted in cases:
+            scripts = Path(directory) / "Scripts"
+            scripts.mkdir()
+            (scripts / "release-version.py").write_bytes((ROOT / "Scripts" / "release-version.py").read_bytes())
+            for branch, engine, verify, activate, accepted in cases:
                 environment = {
                     "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                     "GITHUB_EVENT_NAME": "workflow_dispatch",
-                    "GITHUB_REF": ref,
+                    "GITHUB_REF": f"refs/heads/{branch}",
+                    "GITHUB_OUTPUT": str(Path(directory) / "outputs"),
                     "QUARTZ_ENGINE_REVISION": engine,
                     "QUARTZ_VERIFY_VERSION": verify,
+                    "QUARTZ_ACTIVATE_VERSION": activate,
                 }
-                with self.subTest(ref=ref, engine=engine, verify=verify):
+                with self.subTest(branch=branch, engine=engine, verify=verify, activate=activate):
                     result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
                                             cwd=directory, env=environment, text=True, capture_output=True, timeout=10)
                     self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
@@ -228,6 +283,7 @@ class WorkflowPolicyTests(unittest.TestCase):
                     "GITHUB_REF": "refs/heads/main",
                     "QUARTZ_ENGINE_REVISION": "",
                     "QUARTZ_VERIFY_VERSION": "",
+                    "QUARTZ_ACTIVATE_VERSION": "",
                 })
                 with self.subTest(event=event):
                     result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],

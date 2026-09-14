@@ -2,7 +2,10 @@
 
 Quartz has two development histories and one shipped application. Maintain engine
 changes in `QuartzBrowser/WebKit`, test selected engine commits with Quartz, and
-publish a batch only when a maintainer runs Quartz's `release` workflow. Ordinary
+publish a batch only when a maintainer runs Quartz's `release` workflow. Quartz
+`main` publishes stable releases; Quartz `beta` publishes opt-in prereleases.
+The [beta update manual](BETA_UPDATES.md) covers the native selector, application
+branch synchronization, version ordering, shared signed feed, and recovery. Ordinary
 commits, merges, engine promotions, and candidate builds do not publish Quartz.
 
 This manual is the operating procedure for the workflows committed alongside it.
@@ -39,11 +42,11 @@ GitHub's triggers, cancel an already queued run, or prove that a candidate passe
    to upstream, force-push the long-lived branches, or squash an upstream sync.
 4. Test the exact engine SHA with the intended Quartz code. A green run for a
    different commit is useful context, but does not validate the new candidate.
-5. Promote a tested engine revision to fork `main` when it is ready for shipping.
-   Promotion makes it eligible; publication still needs an explicit action.
-6. In **Quartz > Actions > release > Run workflow**, select Quartz `main` and
-   supply the promoted full engine SHA. Leave it empty to keep Quartz's existing
-   committed engine pin.
+5. Integrate a tested engine into fork `quartz-dev` for beta eligibility; promote
+   it to fork `main` before stable release. Neither action publishes Quartz.
+6. In **Quartz > Actions > release > Run workflow**, choose application branch
+   `main` for stable or `beta` for prereleases and supply the exact eligible SHA.
+   Empty keeps that branch's committed pin and still checks engine eligibility.
 7. Let the release job validate, commit the pin, version, package, sign, and
    publish. Record its actual result and the public-download verification.
 
@@ -60,13 +63,15 @@ changes before that release. Commit frequency is independent of release frequenc
 | Fork `feature/*` | Individual experiments and custom behavior | You work, test, and commit. |
 | Fork `sync/upstream-*` | An upstream merge under review | You resolve conflicts and validate the combined engine. |
 | Fork `main` | Engine revisions considered ready for Quartz release validation | You deliberately promote a tested batch. |
-| `QuartzBrowser/Quartz`, branch `main` | Application changes eligible for the next release | Quartz changes are merged. |
+| `QuartzBrowser/Quartz`, branch `main` | Application changes eligible for the next stable release | Reviewed stable changes are merged. |
+| `QuartzBrowser/Quartz`, branch `beta` | Application changes eligible for beta prereleases | Reviewed beta work and stable synchronization are merged. |
+| Quartz `update-feed` branch | Permanent signed stable/beta appcast served by raw GitHub | Verified published appcast activation fast-forwards the branch. |
 | Quartz `WebKit.lock.json` | Exact engine source used by normal Quartz builds | A validated release update commits a selected revision, or an explicitly reviewed lock change is merged. |
 | Quartz release tag, such as `v0.16.0` | Historical application source and engine pin associated with a version | semantic-release creates a release. |
 
 `upstream/main` is a remote-tracking ref in your engine checkout, not a new branch
-that needs to be published in the fork. The branch names in the two repositories
-are independent: a Quartz application branch called `main` does not refer to
+that needs to be published in the fork. The feed branch is publication data, not application source; do not merge it
+into `main` or `beta`. The branch names in the two repositories are independent: a Quartz application branch called `main` does not refer to
 engine `main`.
 
 ```mermaid
@@ -85,13 +90,15 @@ flowchart LR
 The release selector accepts a complete **40-character lowercase hexadecimal Git
 SHA**, not `main`, `quartz-dev`, a tag, or an abbreviated hash. The selected SHA
 must be available from the public fork, must descend from Quartz's current pin,
-and must be reachable from the fork's `main`. An older promoted commit can be
-selected even if fork `main` has subsequently advanced, provided it still meets
-those ancestry rules. The job does not substitute the latest engine tip.
+and must be reachable from fork `main` for stable or `quartz-dev` for beta.
+These membership checks also apply to a retained pin when the input is empty.
+An earlier integrated commit can be selected if it meets the ancestry rules;
+the job does not substitute the latest engine tip.
 
 A manual **build** accepts a forward candidate from a development or feature
-branch before promotion. This separates testing eligibility from release
-eligibility. Existing release pins and version tags remain the source of truth
+branch before either release integration/promotion gate. Beta release eligibility
+requires `quartz-dev`; stable requires `main`. This separates experimental testing
+from publication eligibility. Existing release pins and version tags remain the source of truth
 for what users actually received.
 
 ## What triggers a build or publication
@@ -101,10 +108,11 @@ for what users actually received.
 | Push a WebKit feature, sync, or `quartz-dev` branch | No automatic cross-repository Quartz build; dispatch one when useful. | No. |
 | Promote engine `quartz-dev` into engine `main` | Select its SHA for a Quartz candidate build or release. | No. |
 | Open or update a Quartz pull request | Automatic `build` workflow using that PR's lock. | No. |
-| Push or merge into Quartz `main` | Automatic `build` workflow using the committed lock. | No. |
+| Push or merge into Quartz `main` or `beta` | Automatic `build` workflow using the committed lock. | No. |
 | Run Quartz `build` manually with an engine SHA | Builds and tests that SHA in the runner's working tree. | No. |
-| Run Quartz `release` on `main`, with `verify_version` empty | Validates the selected engine and Quartz source before semantic-release. | Yes, if there are releasable changes or an unpublished engine pin. |
-| Run Quartz `release` with `verify_version` set and no engine SHA | Rechecks the existing latest release's downloads. | No. |
+| Run Quartz `release` on `main` or `beta`, with verification/activation inputs empty | Validates the selected pair before stable/prerelease publication. | Yes, if there are releasable changes or an unpublished channel engine pin. |
+| Run Quartz `release` with only `verify_version` set | Rechecks an existing version's assets and advertised feed item. | No. |
+| Run Quartz `release` with only `activate_version` set | Verifies and may activate an existing signed appcast if all current items are retained. | No new app release; can advance the live feed. |
 | Create an engine tag | No Quartz release trigger. | No. |
 
 The workflow files are [build.yml](../.github/workflows/build.yml) and
@@ -113,8 +121,8 @@ push trigger in the release workflow. Existing workflows in the WebKit fork may
 have their own CI behavior; the table describes Quartz's integration.
 
 A `fix:` or `feat:` commit describes version impact. It does not press the
-publication button. The release analyzes the accumulated Quartz commits since
-the previous release through [release.config.cjs](../release.config.cjs).
+publication button. The selected branch/channel and accumulated Quartz commits determine the version
+through [release.config.cjs](../release.config.cjs).
 
 ## Set up an engine development checkout
 
@@ -441,11 +449,12 @@ PR may be left unmerged while you use its evidence to promote the engine and
 select it in the release workflow. Candidate testing does not require committing
 a lock change to Quartz `main`.
 
-If you do merge an explicit lock update, review it as a production dependency
-change, ensure its engine revision is promoted, and preserve the same evidence.
-A normal release with an empty engine input will keep that committed pin.
-Do not rely on the publication selector to repair an incorrectly reviewed
-manually edited lock.
+If you merge an explicit lock update, review it as a production dependency
+change, ensure its revision meets the target channel's engine membership, and
+preserve the evidence. Empty release input keeps the committed pin but still
+checks membership: fork `main` for stable, `quartz-dev` for beta. A beta-only pin
+merged into Quartz `main` is rejected until the engine is promoted. The selector
+does not repair the lock or promote the engine for you.
 
 ### Cover the intended behavior
 
@@ -463,6 +472,8 @@ gaps before declaring the batch ready for users.
 
 ## Promote a tested engine batch
 
+For beta publication, the engine must already be integrated into fork
+`quartz-dev`; promotion to fork `main` is the additional stable gate.
 Promotion moves fork `main` to the tested integration revision while preserving
 its SHA. Avoid a squash or a new promotion merge commit, which would create a
 revision different from the one you just tested.
@@ -499,7 +510,9 @@ git rev-parse origin/main
 
 This push makes the engine eligible for a release input. It does not change
 Quartz's committed lock, publish a GitHub release, or update an installed app.
-A release may still reject or fail the candidate during final validation.
+A stable release may still reject or fail the candidate during final validation.
+Beta publication uses the corresponding `quartz-dev` membership gate and still
+requires the selected source pair to pass the release workflow.
 
 An annotated engine tag is optional provenance, for example a consistently named
 `quartz-engine-*` tag recorded in the batch log. Create it only for the intended
@@ -510,149 +523,210 @@ to create separate WebKit GitHub releases or distribute a standalone engine ZIP.
 
 ### Choose the release inputs
 
-Open **QuartzBrowser/Quartz > Actions > release > Run workflow** and select
-Quartz branch **main**. The inputs have separate meanings:
+Open **QuartzBrowser/Quartz > Actions > release > Run workflow**. Select
+application branch **main** for stable or **beta** for prereleases. The selected
+branch determines the channel; there is no free-form channel input.
 
 | Input | Value | Result |
 | --- | --- | --- |
-| `engine_revision` | Empty | Keep `WebKit.lock.json` exactly pinned to its committed revision. New fork commits are ignored. |
-| `engine_revision` | Full promoted 40-character lowercase SHA | Select that exact forward engine revision for validation and publication. |
-| `verify_version` | Empty | Run the normal release path. |
-| `verify_version` | Existing latest release's numeric version, without `v` | Run public-download verification only; leave `engine_revision` empty. |
+| `engine_revision` | Empty | Keep the selected branch's committed lock; still verify channel membership. |
+| `engine_revision` | Full 40-character lowercase SHA | Select that exact forward engine for validation and publication. Stable requires fork `main`; beta requires `quartz-dev`. |
+| `verify_version` | Existing full label, without `v` | Read-only audit of versioned assets, canonical feed, and legacy feed where applicable. |
+| `activate_version` | Existing full label, without `v` | Explicit recovery that verifies and may activate that release's already signed feed. No new app release. |
 
-`engine_revision` and `verify_version` are mutually exclusive. Do not supply both.
-A publication request targets Quartz `main`; a feature branch build belongs in
-the `build` workflow. Workflow files supporting these inputs must already exist
-on the default branch for the normal Run workflow experience.
+At most one input may be nonempty. All empty means normal publication with the
+committed pin. Version labels must match the application branch: `1.1.0` on
+`main`, or `1.1.0-beta.2` on `beta`. Candidate experiments belong in the `build`
+workflow. Supporting workflows must exist on the default branch for normal
+manual-dispatch availability.
 
 ### Publish application changes with the existing engine
+
+For stable:
 
 ```sh
 gh workflow run release.yml --repo QuartzBrowser/Quartz --ref main
 ```
 
-This intentionally does not ask GitHub for a newer engine tip. Pending Quartz
-Conventional Commits determine the version. If there are no releasable application
-changes and the current engine is already published, semantic-release may make
-no new release; a successful no-op is not a newly published version.
-
-### Publish a selected engine batch and pending application changes
+For a beta prerelease:
 
 ```sh
+gh workflow run release.yml --repo QuartzBrowser/Quartz --ref beta
+```
+
+Both requests preserve the committed engine SHA and check its channel membership.
+A request with no releasable application changes and no unpublished engine for
+that channel may complete without a new version. A green no-op is not publication.
+
+### Publish an explicitly selected engine batch
+
+The stable command uses a SHA already promoted to WebKit `main`:
+
+```sh
+(
+set -eu
 QUARTZ_ENGINE_REVISION='PASTE_THE_FULL_LOWERCASE_PROMOTED_SHA'
 gh workflow run release.yml --repo QuartzBrowser/Quartz --ref main \
   -f engine_revision="$QUARTZ_ENGINE_REVISION"
-gh run list --repo QuartzBrowser/Quartz --workflow release.yml --limit 5
+)
+```
+
+For beta, use a tested SHA integrated into WebKit `quartz-dev`:
+
+```sh
+(
+set -eu
+QUARTZ_ENGINE_REVISION='PASTE_THE_FULL_LOWERCASE_BETA_ENGINE_SHA'
+gh workflow run release.yml --repo QuartzBrowser/Quartz --ref beta \
+  -f engine_revision="$QUARTZ_ENGINE_REVISION"
+)
+```
+
+Check the actual run rather than treating dispatch success as a release:
+
+```sh
+gh run list --repo QuartzBrowser/Quartz --workflow release.yml --limit 10
 gh run watch --repo QuartzBrowser/Quartz
 ```
 
-Check the run's application SHA and engine plan. The workflow captures the Quartz
-revision associated with the dispatch and builds that application tree. If
-Quartz `main` advances during validation, the commit gate stops the run instead
-of rebasing the validated result onto untested application changes. Dispatch a
-fresh release after reviewing the new main state.
+The workflow snapshots the selected Quartz branch at dispatch and builds that
+application tree. If that remote branch advances during validation, the commit
+gate stops instead of rebasing the tested result onto untested application
+changes. Review the new source and start a fresh request. Stable and beta share
+serialized publication; repeatedly dispatching requests does not hurry a build.
 
-Do not repeatedly press Run workflow to hurry a build. Release runs are
-serialized; duplicate requests can wait, become stale, or require a fresh run
-once main has moved. A slow uncached engine build is not a reason to bypass the
-validation sequence.
+Engine-only batches produce an automatically generated `fix(webkit)` commit.
+Stable normally gets patch impact; beta follows semantic-release's prerelease
+sequence for the selected version line. Pending `feat:`/breaking application
+commits can raise the base version. Upstream engine commit messages do not each
+independently bump Quartz's version. Describe intended user-visible feature or
+breaking impact deliberately in accompanying Quartz commits and release notes.
 
-Engine-only batches produce an automatically generated `fix(webkit)` commit and
-therefore a Quartz patch release. A batch containing Quartz `feat:` commits can
-produce a minor release; breaking changes can require a major release. An engine
-change's feature impact is not inferred from every upstream commit. If a fork
-feature warrants a different public version impact, describe that deliberately
-in the accompanying Quartz Conventional Commit and release notes.
-
-Users receive the engine embedded in the normal signed Quartz update. They do
-not select an engine branch, compile WebKit, or install a separate engine release.
-The exact source pin and license notices stay with the distributed app.
+Users receive the engine embedded in the signed Quartz application update.
+Stable users remain on stable by default; Beta users opt in through the native
+channel menu and remain eligible for newer stable releases. They do not select
+Git branches or install a separate engine. See [beta/stable operation](BETA_UPDATES.md)
+for branch synchronization, numeric versions, promotion, and no-downgrade behavior.
 
 ## Release planning and failure recovery
 
 ### What the workflow does
 
-The sequence in [release.yml](../.github/workflows/release.yml) and
-[update-webkit.py](../Scripts/update-webkit.py) is:
+The sequence in [release.yml](../.github/workflows/release.yml),
+[update-webkit.py](../Scripts/update-webkit.py), and
+[publish-update-feed.py](../Scripts/publish-update-feed.py) is:
 
-1. Snapshot the selected Quartz `main` revision and plan the exact engine input.
-2. Validate revision format and ancestry. Read the latest stable Quartz release's
-   lock to determine whether this engine has already been published.
+1. Validate branch and mutually exclusive inputs; snapshot the selected Quartz
+   application revision and choose stable or beta from the branch.
+2. Validate the exact engine's forward ancestry and channel membership, including
+   retained pins. Read the latest matching channel release's lock to determine
+   whether that channel already published the engine.
 3. Stage the candidate lock in the runner's working tree.
-4. Restore only a matching verified engine cache or build the candidate. Run the
-   required tests, packaging/runtime checks, and updater fixture checks.
-5. Recheck that the application source and remote Quartz `main` still match the
-   plan. Commit only the validated lock change, or an empty engine-publication
-   retry commit when needed, and push without rewriting history.
-6. Run semantic-release in the same job, generating release metadata, packaging
-   the universal app, signing the final archive/feed with the existing Sparkle
-   key, and publishing the GitHub release and its assets.
-7. Download the public assets afresh, compare them with the prepared bytes,
-   verify checksums and the extracted app's code signature, verify the update
-   archive against the embedded key/version/download URL, and compare the stable
-   latest-feed route. This public audit does not launch the engine again; the
-   packaging/runtime checks occur earlier. Inspect each gate's logged results.
+4. Restore an exact verified engine cache or build the fork; run tests,
+   packaging/runtime checks, and updater fixtures.
+5. Recheck the planned application tree and remote release branch, commit only
+   the validated lock or a needed empty engine retry, and push without rewriting.
+6. Run semantic-release to prepare and sign a universal app/archive and a feed
+   retaining stable/beta history, then publish the versioned GitHub assets.
+7. Compare public versioned assets with the prepared bytes, verify checksums,
+   and authenticate the signed feed/archive with the configured public key before
+   ZIP extraction. Then check app code signing, embedded key, full/base/build/
+   channel metadata, and download URL. This audit does not launch the engine again.
+8. Verify the already signed appcast using the public key, require unchanged
+   retention of currently advertised items, and fast-forward the `update-feed`
+   branch. This is raw GitHub feed hosting; it creates no Pages site.
+9. Verify the canonical public feed retains the exact signed release item, and
+   also verify the legacy route for releases that embedded it. A newer combined
+   feed may contain extra items without invalidating the older version's audit.
 
-The script's local planning mode is read-only. From a Quartz checkout with all
-release tags fetched, these commands let you inspect the selector without
-starting an expensive build or publishing anything:
+Local planning is read-only. Fetch release tags first and run the appropriate
+channel on the intended application source:
 
 ```sh
+(
+set -eu
 git fetch origin --tags
-python3 Scripts/update-webkit.py plan
-QUARTZ_ENGINE_REVISION='PASTE_THE_FULL_LOWERCASE_PROMOTED_SHA'
-python3 Scripts/update-webkit.py plan --revision "$QUARTZ_ENGINE_REVISION"
+python3 Scripts/update-webkit.py plan --channel stable
+)
 ```
 
-The default plan retains the committed pin. `--revision` is the explicit
-promoted-engine selector. The `release_required` field concerns engine
-publication; `false` does not mean there are no pending releasable application
-commits. Planning can fail when tags for the latest published release are
-missing locally, when the GitHub API is unavailable, or when ancestry is invalid.
+```sh
+(
+set -eu
+git fetch origin --tags
+QUARTZ_ENGINE_REVISION='PASTE_THE_FULL_LOWERCASE_BETA_ENGINE_SHA'
+python3 Scripts/update-webkit.py plan --channel beta --revision "$QUARTZ_ENGINE_REVISION"
+)
+```
 
-The lower-level `stage --plan` and `commit --plan` commands exist for the workflow's
-validated transaction. `commit` can push Quartz `main`; it is not a dry run or a
-shortcut around the required tests. Use the candidate command for experiments
-and the manual workflow for publication.
+The plan's `channel` and `release_branch` accompany its exact app/engine SHAs.
+`release_required` concerns engine publication on that channel; `false` does not
+mean there are no releasable application changes. Planning can fail for missing
+tags, unavailable APIs, wrong channel membership, or invalid ancestry. An empty
+input never means “follow the branch tip” or “skip the promotion check.”
+
+The lower-level `stage --plan` and `commit --plan` commands are the workflow's
+transaction. `commit` can push the selected Quartz `main` or `beta` branch and
+requires the matching local branch. It is not a dry run or a substitute for the
+validation gates. Use `candidate` for experiments and manual workflows for release.
 
 ### Respond according to the failure stage
 
 | Observed result | What may have changed | Next action |
 | --- | --- | --- |
-| Invalid input, unpublished candidate, or bad ancestry | No release pin committed. | Select the correct SHA, promote it if appropriate, or fix the history on a new forward branch. |
-| Engine build, tests, or pre-commit package verification fail | The runner's temporary candidate may exist; the release path has not committed that candidate pin. | Fix the cause, produce/test a new candidate where required, and dispatch a fresh run. |
-| Quartz `main` moved during validation | The tested candidate is not committed by the stale plan. | Review the new application changes and dispatch again against the new main revision. |
-| Pin commit succeeded but publication failed | Quartz main may already contain the validated engine pin; release tags/assets may be incomplete depending on the failing step. | Inspect main, tags, assets, and logs before retrying publication. |
-| Release published but public-download verification failed | Users may already be offered the published release. | Recheck the published version using `verify_version`; investigate persistent mismatches. |
-| Recheck-only run passed | Existing public release was verified again. | Record the result; no new version was created. |
+| Input, channel membership, or ancestry failure | No new pin committed by the run. | Select the correct branch/SHA, integrate or promote as needed. |
+| Build/tests/pre-commit package failure | Temporary candidate files; no validated pin commit from this path. | Fix the cause, retest, and dispatch a fresh request. |
+| Selected Quartz branch moved | The old plan is refused. | Review and validate against the new source. |
+| Pin committed; app publication failed | Pin, tag, draft, or partial assets depending on stage. | Inspect the actual state and fix the specific failure before publication retry. |
+| GitHub assets published; immutable audit failed | Public assets exist; new feed has not been activated by this path. | Investigate and verify assets before activating anything. |
+| Assets verified; feed activation failed | A valid signed release snapshot may exist without an active feed item. | Use explicit `activate_version` if it retains current history. |
+| Feed pushed; public propagation check failed | Branch may already advertise the new item. | Use read-only `verify_version` and investigate persistent mismatches. |
+| Older activation would drop/change newer items | Newer feed history is preserved; activation refuses. | Verify an already retained item or prepare a fresh release against current history. |
 
-Retries are deliberate. Use **Run workflow** to create a fresh dispatch against
-the current Quartz main, rather than rerunning an old source snapshot. Historical
-workflow reruns use historical code: rerunning a workflow from before this policy
-change can execute the old automatic engine-selection/publication path. Inspect
-old queued or in-progress runs during the transition; changing the workflow file
-does not cancel those jobs. There is no five-minute retry schedule. When the pin
-commit exists but the latest published release still lacks that engine, a fresh
-manual release can create an empty `fix(webkit)` commit so semantic-release has
-a releasable engine change. This retry logic is conditional on actual published
-state, not on an assumption that the previous run completed. Recheck after any
-partial tag or draft-release failure and resolve inconsistent release metadata
-before retrying; do not blindly delete tags or overwrite signed assets.
+A legacy client may see a new stable through GitHub's latest-stable route as soon
+as the release is published, before the permanent-feed activation stage. Keep
+that migration boundary in view when deciding who may already have an update.
 
-For a latest release that published successfully but failed the public audit:
+Retries are explicit. Use **Run workflow** against the current selected branch;
+historical reruns use old code and can execute obsolete release behavior. Old
+queued/running jobs are not cancelled by editing the current workflow. There is
+no five-minute schedule or automatic publication retry.
+
+If the selected channel's published release still lacks a committed engine pin,
+a new manual publication can create an empty `fix(webkit)` commit to make it
+releasable. Once the GitHub release exists, that comparison may be satisfied even
+if feed activation failed: use the dedicated activation recovery path for that
+case. Do not blindly delete tags, rewrite branches, or replace signed assets.
+
+For a read-only beta recheck:
 
 ```sh
-QUARTZ_RELEASE_VERSION='0.16.0'
-gh workflow run release.yml --repo QuartzBrowser/Quartz --ref main \
+(
+set -eu
+QUARTZ_RELEASE_VERSION='1.1.0-beta.2'
+gh workflow run release.yml --repo QuartzBrowser/Quartz --ref beta \
   -f verify_version="$QUARTZ_RELEASE_VERSION"
+)
 ```
 
-Replace the example version with the actual latest published version, without
-`v`, and leave the engine input empty. This path downloads and verifies existing
-assets; it does not rebuild or replace them. A normal no-op release rerun may
-skip the public audit when no new version is published, which is why this
-separate input exists. See [release verification](releases.md#automated-release-boundary)
-for the exact checks and latest-feed propagation retries.
+For explicit activation of that existing beta's verified signed snapshot:
+
+```sh
+(
+set -eu
+QUARTZ_RELEASE_VERSION='1.1.0-beta.2'
+gh workflow run release.yml --repo QuartzBrowser/Quartz --ref beta \
+  -f activate_version="$QUARTZ_RELEASE_VERSION"
+)
+```
+
+Use the actual published version. For stable use `--ref main` and a label such
+as `1.1.0`; omit `v` and leave other inputs empty. An older version can be audited
+if its item remains unchanged in the feed. Activation is allowed only when every
+currently advertised item is retained unchanged, and needs the public key rather
+than private signing material. Seed the canonical feed before the new verifier
+is used on historical assets. See [detailed recovery and migration](BETA_UPDATES.md#inspect-and-recover-a-release)
+and [public verification](releases.md#automated-release-boundary).
 
 ## Revert a bad change without rewriting history
 
@@ -832,6 +906,7 @@ Copy this into the release's maintenance record or linked issue/PR:
 ## Quartz publication
 
 - Requested date / maintainer:
+- Channel and Quartz application release branch:
 - Quartz application SHA at dispatch:
 - Previous committed engine pin:
 - Selected engine SHA, or explicit keep-current-pin decision:
@@ -842,7 +917,10 @@ Copy this into the release's maintenance record or linked issue/PR:
 - Final Quartz release tag / source SHA:
 - Published WebKit.lock.json revision:
 - Published version, assets, and SHA256SUMS:
-- Public-download verification run and outcome:
+- Versioned public-asset verification run and outcome:
+- update-feed commit and active public-item verification:
+- Legacy feed check, if applicable:
+- verify_version / activate_version recovery, if any:
 - Apple Silicon / Intel / macOS versions actually exercised:
 - In-app update installation and restoration result:
 - Checks still unrun and operational follow-up:
@@ -891,8 +969,8 @@ which inputs and guards Quartz actually implements.
 
 ### I committed ten times. Did that create ten releases?
 
-No. Neither fork pushes nor Quartz `main` pushes start the release workflow.
-They can contribute to one later manually requested release. Quartz PR/main CI
+No. Neither fork pushes nor Quartz `main`/`beta` pushes start the release workflow.
+They can contribute to one later manually requested release. Quartz PR/main/beta CI
 still runs automatically so everyday integration receives validation.
 
 ### I promoted WebKit main. Why has my installed Quartz not changed?
@@ -904,15 +982,17 @@ Git branch.
 
 ### I left engine_revision empty. Will it pick up the latest fork main?
 
-No. Empty means keep the committed Quartz lock. Supply the complete promoted SHA
-when you intentionally want an engine update. This applies even if fork `main`
+No. Empty means keep the selected Quartz branch's committed lock and still check
+engine membership: fork `main` for stable, `quartz-dev` for beta. Supply the full
+eligible SHA when you intentionally want an engine update. This applies even if fork `main`
 is hundreds of commits ahead.
 
 ### Can I test a branch before it is on WebKit main?
 
-Yes. Push its commit to the fork, then use Quartz's manual `build` input or the
-local `candidate` command on a Quartz test branch. Publication selection adds
-the fork-main reachability requirement.
+Yes. Push its commit to the fork, then use manual `build` or local `candidate`.
+Beta publication requires integration into fork `quartz-dev`; stable publication
+requires promotion to fork `main`. A candidate artifact alone reaches neither
+user update channel.
 
 ### Can I type a branch name, a GitHub URL, or a short SHA?
 
@@ -983,9 +1063,10 @@ macOS versions separately; none is an automatic substitute for the others.
 
 ### Does a successful recheck publish a fixed app?
 
-No. `verify_version` rechecks existing latest-release bytes. If the published app
-itself needs correction, create a forward fix and publish a higher Quartz version.
-Do not replace the signed ZIP with new bytes under the same version.
+No. `verify_version` rechecks existing assets and their retained feed item.
+`activate_version` can advertise an existing signed snapshot only when it retains
+current history. If the app needs correction, create a forward fix and publish
+a higher version on the intended channel; do not replace the signed ZIP.
 
 ### Where do I look when documentation and GitHub disagree?
 
@@ -998,7 +1079,8 @@ configuration or publication. Check for runs queued before a trigger change.
 
 **Decision:** use `quartz-dev` for engine integration, preserve real upstream
 merges, promote tested engine SHAs to fork `main`, and publish Quartz through a
-manual workflow with an explicit engine selector. Keep normal CI automatic.
+manual workflow with an exact engine selector and stable/beta application branch
+selection. Both retained and selected pins obey the channel's integration gate. Keep normal CI automatic.
 
 **Reason:** engine development, upstream synchronization, validation, and user
 release each have different timing and evidence needs. A moving branch is useful

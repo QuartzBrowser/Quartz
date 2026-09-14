@@ -174,31 +174,33 @@ does not establish fork or release compatibility.
 
 ## Maintaining and updating the fork
 
-Use fork `quartz-dev` for customizations and upstream integrations, and promote a
-tested batch to fork `main` when it is ready for shipping. Quartz publication is
-manual: neither engine pushes nor Quartz `main` pushes publish releases. Normal
-Quartz PR and `main` builds remain automatic.
+Use fork `quartz-dev` for customizations and upstream integrations. Quartz beta
+prereleases can select exact engine SHAs from that history; stable releases
+require promotion of the tested engine to fork `main`. Publication is manual:
+engine and Quartz pushes do not publish. Quartz PR/main/beta CI stays automatic.
 
 In **Quartz > Actions > build > Run workflow**, `engine_revision` can select a
-full forward candidate SHA from a fork development branch for validation without
+full forward candidate SHA from a fork feature or integration branch without
 committing a pin or publishing. In **Actions > release > Run workflow**, choose
-Quartz `main` and supply a full promoted `engine_revision` to update the engine.
-Leave it empty to keep the committed `WebKit.lock.json` revision. The release
-selector requires the SHA to descend from the current pin and be reachable from
-fork `main`; it never silently chooses the latest engine tip.
+application branch `main` for stable or `beta` for prereleases. Supply a complete
+engine SHA or leave it empty to keep the selected branch's committed lock.
+Both retained and explicit pins must belong to fork `main` for stable or fork
+`quartz-dev` for beta. Neither path follows a moving tip.
 
-The serialized release path validates the selected application/engine pair,
-checks that Quartz main has not moved, commits a validated engine pin with a
-`fix(webkit)` Conventional Commit, and runs semantic-release. Engine-only updates
-produce a patch release; pending Quartz changes can raise the version further.
-Failures require an explicit new run or the separate `verify_version` input for
-rechecking an already published latest version. There is no scheduled retry.
+The serialized release path validates the application/engine pair, checks that
+the selected application branch has not moved, commits any validated pin update,
+and runs semantic-release. Engine-only batches are represented by `fix(webkit)`;
+the selected channel and pending application history determine the resulting
+stable or beta label. Versioned assets are verified before the permanent signed
+feed advances. `verify_version` is read-only; `activate_version` explicitly
+recovers activation of an existing signed feed when safe. There is no schedule.
 
-The [WebKit maintenance manual](WEBKIT_MAINTENANCE.md) documents the complete
-branch model, source checkout setup, customization ledger, upstream merges,
-candidate commands, promotion, release inputs, retry and rollback procedures,
-validation evidence, and operational checklists. The [release checklist](releases.md)
-covers the actual packaging and public-download gates.
+The [WebKit maintenance manual](WEBKIT_MAINTENANCE.md) covers the branch model,
+editing checkout, customization ledger, upstream merges, candidate commands,
+promotion, and engine failure recovery. The [beta update manual](BETA_UPDATES.md)
+covers opt-in, application branch sync, version ordering, signed feed history,
+activation recovery, and migration. The [release checklist](releases.md) covers
+packaging and verification gates.
 
 For a local engine experiment, use
 `python3 Scripts/update-webkit.py candidate --revision FULL_LOWERCASE_SHA` on a

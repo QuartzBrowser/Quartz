@@ -116,20 +116,27 @@ In the pull request description, include:
 ## Releases
 
 Quartz uses semantic-release when a maintainer explicitly runs **Actions > release >
-Run workflow** on `main`. Commits and merges accumulate until that action; they
+Run workflow** on `main` for stable or `beta` for prereleases. Commits and merges accumulate until that action; they
 do not automatically publish. The workflow analyzes commit titles, updates
 `CHANGELOG.md` and `version.txt`, builds the macOS archive, tags the release,
 and publishes the GitHub release without a release pull request. Normal PR and
-`main` builds still run automatically.
+`main`/`beta` builds still run automatically.
 
 Leave the release's `engine_revision` input empty to retain the committed engine
-pin, or supply an exact promoted fork SHA for an engine update. Develop engine
-features and upstream syncs through fork `quartz-dev`; the
+pin, or supply an exact forward fork SHA for an engine update. Stable pins must
+belong to fork `main`; beta pins must belong to fork `quartz-dev`, even when the
+input is empty. Develop engine features and upstream syncs through fork
+`quartz-dev`; the
 [maintenance manual](docs/WEBKIT_MAINTENANCE.md) covers its branch model, candidate
 tests, upstream merge rules, deliberate promotion, publication, and recovery.
+The [beta update manual](docs/BETA_UPDATES.md) covers application branch sync,
+user opt-in/out, numeric version ordering, the permanent signed feed, and the
+separate read-only verification and explicit feed activation inputs.
 
-Use Conventional Commit titles for squash merges so semantic-release can classify
-changes:
+Use Conventional Commit titles so semantic-release can classify changes. Squash
+merges are suitable for ordinary focused application PRs; preserve merge/tag
+history for stable/beta synchronization and real upstream engine merges:
+
 
 - `fix: describe the bug fix` for patch releases
 - `feat: describe the user-facing feature` for minor releases

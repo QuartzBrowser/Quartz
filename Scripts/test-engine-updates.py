@@ -33,6 +33,8 @@ COMMIT_ENDPOINT = f"/repos/QuartzBrowser/WebKit/commits/{CANDIDATE}"
 ANCESTRY_ENDPOINT = f"/repos/QuartzBrowser/WebKit/compare/{PREVIOUS}...{CANDIDATE}"
 PROMOTION_ENDPOINT = f"/repos/QuartzBrowser/WebKit/compare/{CANDIDATE}...{OTHER}"
 RELEASE_ENDPOINT = "/repos/QuartzBrowser/Quartz/releases/latest"
+BETA_ENGINE_ENDPOINT = "/repos/QuartzBrowser/WebKit/commits/quartz-dev"
+BETA_RELEASE_ENDPOINT = "/repos/QuartzBrowser/Quartz/releases?per_page=100&page=1"
 ERRORS = (RuntimeError, ValueError)
 
 
@@ -107,8 +109,8 @@ class EngineUpdateTests(unittest.TestCase):
     def head(self):
         return git(self.repository, "rev-parse", "HEAD")
 
-    def origin_head(self):
-        return git(self.origin, "rev-parse", "refs/heads/main")
+    def origin_head(self, branch="main"):
+        return git(self.origin, "rev-parse", f"refs/heads/{branch}")
 
     def read_lock(self):
         return json.loads((self.repository / LOCK_NAME).read_text())
@@ -116,11 +118,11 @@ class EngineUpdateTests(unittest.TestCase):
     def write_lock(self, lock):
         (self.repository / LOCK_NAME).write_text(json.dumps(lock, indent=2) + "\n")
 
-    def plan(self, revision=CANDIDATE):
-        return updates.plan_update(self.repository, self.api, revision=revision)
+    def plan(self, revision=CANDIDATE, channel="stable"):
+        return updates.plan_update(self.repository, self.api, revision=revision, channel=channel)
 
-    def stage(self, revision=CANDIDATE):
-        plan = self.plan(revision=revision)
+    def stage(self, revision=CANDIDATE, channel="stable"):
+        plan = self.plan(revision=revision, channel=channel)
         updates.stage_update(self.repository, plan)
         return plan
 
@@ -138,17 +140,19 @@ class EngineUpdateTests(unittest.TestCase):
             operation()
         self.assertEqual(self.snapshot(), before)
 
-    def pin_candidate(self):
+    def pin_candidate(self, branch="main"):
         lock = self.read_lock()
         lock["revision"] = CANDIDATE
         self.write_lock(lock)
         git(self.repository, "add", LOCK_NAME)
         git(self.repository, "commit", "-qm", "fix(webkit): advance engine")
-        git(self.repository, "push", "-q", "origin", "main")
+        git(self.repository, "push", "-q", "origin", branch)
 
     def test_published_current_engine_is_a_noop(self):
         plan = self.plan(revision=None)
         self.assertEqual(plan, {
+            "channel": "stable",
+            "release_branch": "main",
             "quartz_revision": self.initial_head,
             "previous_revision": PREVIOUS,
             "revision": PREVIOUS,
@@ -161,18 +165,19 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertEqual(self.origin_head(), self.initial_head)
         self.assertEqual(git(self.repository, "status", "--porcelain"), "")
 
-    def test_default_plan_never_follows_or_queries_the_fork(self):
-        # Even an advanced or unavailable fork main cannot select a new engine.
-        for branch in [{"sha": CANDIDATE}, None, RuntimeError("Fork unavailable")]:
+    def test_default_plan_validates_promotion_without_following_the_fork(self):
+        before = self.snapshot()
+        plan = self.plan(revision=None)
+        self.assertEqual(plan["revision"], PREVIOUS)
+        self.assertIs(plan["release_required"], False)
+        self.assertEqual(self.requests, [
+            f"/repos/QuartzBrowser/WebKit/commits/{PREVIOUS}", ENGINE_ENDPOINT, ANCESTRY_ENDPOINT, RELEASE_ENDPOINT,
+        ])
+        self.assertEqual(self.snapshot(), before)
+        for branch in [None, RuntimeError("Fork unavailable")]:
             with self.subTest(branch=branch):
                 self.responses[ENGINE_ENDPOINT] = branch
-                self.requests.clear()
-                before = self.snapshot()
-                plan = self.plan(revision=None)
-                self.assertEqual(plan["revision"], PREVIOUS)
-                self.assertIs(plan["release_required"], False)
-                self.assertEqual(self.requests, [RELEASE_ENDPOINT])
-                self.assertEqual(self.snapshot(), before)
+                self.assert_rejected_without_changes(lambda: self.plan(revision=None))
 
     def test_default_plan_reads_committed_pin_and_preserves_local_edits(self):
         self.write_lock(self.original_lock | {"revision": OTHER})
@@ -199,7 +204,7 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertEqual(plan["revision"], CANDIDATE)
         self.assertEqual(plan["published_revision"], PREVIOUS)
         self.assertIs(plan["release_required"], True)
-        self.assertEqual(self.requests, [RELEASE_ENDPOINT])
+        self.assertEqual(self.requests, [COMMIT_ENDPOINT, ENGINE_ENDPOINT, RELEASE_ENDPOINT])
 
     def test_release_before_engine_integration_has_no_published_pin(self):
         self.responses[RELEASE_ENDPOINT]["tag_name"] = "v0.9.0"
@@ -482,7 +487,9 @@ class EngineUpdateTests(unittest.TestCase):
         plan = json.loads(stdout.getvalue())
         self.assertEqual(plan["revision"], PREVIOUS)
         self.assertEqual(json.loads(output_file.read_text()), plan)
-        self.assertEqual(self.requests, [RELEASE_ENDPOINT])
+        self.assertEqual(self.requests, [
+            f"/repos/QuartzBrowser/WebKit/commits/{PREVIOUS}", ENGINE_ENDPOINT, ANCESTRY_ENDPOINT, RELEASE_ENDPOINT,
+        ])
         outputs = dict(line.split("=", 1) for line in github_output.read_text().splitlines())
         self.assertEqual(json.loads(outputs["plan"]), plan)
         self.assertEqual(outputs["quartz_revision"], self.initial_head)
@@ -649,6 +656,160 @@ class EngineUpdateTests(unittest.TestCase):
             updates.commit_update(self.repository, plan)
         self.assertEqual(self.head(), self.initial_head)
         self.assertEqual(self.origin_head(), self.initial_head)
+
+    def start_beta(self):
+        git(self.repository, "switch", "-qc", "beta")
+        git(self.repository, "push", "-q", "-u", "origin", "beta")
+        git(self.repository, "tag", "v1.1.0-beta.1")
+        self.responses[BETA_ENGINE_ENDPOINT] = {"sha": CANDIDATE}
+        self.responses[BETA_RELEASE_ENDPOINT] = [
+            {"tag_name": "v1.1.0-beta.1", "draft": False, "prerelease": True},
+        ]
+
+    def test_beta_selects_development_commit_without_requiring_main_promotion(self):
+        self.start_beta()
+        self.responses[ENGINE_ENDPOINT] = RuntimeError("Beta must not ask for stable promotion")
+        plan = self.plan(channel="beta")
+        self.assertEqual(plan["channel"], "beta")
+        self.assertEqual(plan["release_branch"], "beta")
+        self.assertEqual(plan["revision"], CANDIDATE)
+        self.assertEqual(plan["published_revision"], PREVIOUS)
+        self.assertNotIn(ENGINE_ENDPOINT, self.requests)
+        self.assertNotIn(RELEASE_ENDPOINT, self.requests)
+
+    def test_beta_default_retains_exact_pin_even_when_development_has_advanced(self):
+        self.start_beta()
+        plan = self.plan(revision=None, channel="beta")
+        self.assertEqual(plan["revision"], PREVIOUS)
+        self.assertFalse(plan["release_required"])
+        self.assertIn(BETA_ENGINE_ENDPOINT, self.requests)
+
+    def test_beta_rejects_feature_commit_not_integrated_into_development(self):
+        self.start_beta()
+        self.responses[BETA_ENGINE_ENDPOINT] = {"sha": PREVIOUS}
+        self.responses[f"/repos/QuartzBrowser/WebKit/compare/{CANDIDATE}...{PREVIOUS}"] = {
+            "status": "behind", "merge_base_commit": {"sha": PREVIOUS},
+        }
+        self.assert_rejected_without_changes(lambda: self.plan(channel="beta"))
+
+    def test_stable_default_cannot_publish_an_unpromoted_merged_beta_pin(self):
+        self.pin_candidate()
+        self.responses[ENGINE_ENDPOINT] = {"sha": PREVIOUS}
+        self.responses[f"/repos/QuartzBrowser/WebKit/compare/{CANDIDATE}...{PREVIOUS}"] = {
+            "status": "behind", "merge_base_commit": {"sha": PREVIOUS},
+        }
+        self.assert_rejected_without_changes(lambda: self.plan(revision=None))
+        self.responses[ENGINE_ENDPOINT] = {"sha": CANDIDATE}
+        self.assertEqual(self.plan(revision=None)["revision"], CANDIDATE)
+
+    def test_beta_chooses_greatest_beta_version_and_ignores_other_channels_and_drafts(self):
+        self.start_beta()
+        git(self.repository, "tag", "v1.1.0-beta.2")
+        self.pin_candidate(branch="beta")
+        git(self.repository, "tag", "v1.1.0-beta.10")
+        self.responses[BETA_RELEASE_ENDPOINT] = [
+            {"tag_name": "v1.1.0-beta.2", "draft": False, "prerelease": True},
+            {"tag_name": "v2.0.0", "draft": False, "prerelease": False},
+            {"tag_name": "v3.0.0-beta.1", "draft": True, "prerelease": True},
+            {"tag_name": "v3.0.0-alpha.1", "draft": False, "prerelease": True},
+            {"tag_name": "v1.1.0-beta.10", "draft": False, "prerelease": True},
+        ]
+        plan = self.plan(revision=None, channel="beta")
+        self.assertEqual(plan["published_revision"], CANDIDATE)
+        self.assertFalse(plan["release_required"])
+        self.assertNotIn(RELEASE_ENDPOINT, self.requests)
+
+    def test_beta_finds_its_publication_beyond_a_page_of_stable_releases(self):
+        self.start_beta()
+        beta_release = self.responses[BETA_RELEASE_ENDPOINT]
+        self.responses[BETA_RELEASE_ENDPOINT] = [self.responses[RELEASE_ENDPOINT]] * 100
+        second_page = "/repos/QuartzBrowser/Quartz/releases?per_page=100&page=2"
+        self.responses[second_page] = beta_release
+        plan = self.plan(revision=None, channel="beta")
+        self.assertEqual(plan["published_revision"], PREVIOUS)
+        self.assertFalse(plan["release_required"])
+        self.assertIn(second_page, self.requests)
+
+    def test_no_beta_publication_does_not_substitute_latest_stable_state(self):
+        self.start_beta()
+        self.responses[BETA_RELEASE_ENDPOINT] = [self.responses[RELEASE_ENDPOINT]]
+        plan = self.plan(revision=None, channel="beta")
+        self.assertEqual(plan["published_revision"], "")
+        self.assertTrue(plan["release_required"])
+        self.assertNotIn(RELEASE_ENDPOINT, self.requests)
+
+    def test_beta_release_query_failures_do_not_create_a_retry_plan(self):
+        self.start_beta()
+        for response in (None, {}, [None], RuntimeError("API unavailable")):
+            with self.subTest(response=response):
+                self.responses[BETA_RELEASE_ENDPOINT] = response
+                self.assert_rejected_without_changes(lambda: self.plan(channel="beta"))
+
+    def test_beta_commit_updates_only_beta_and_published_retry_becomes_a_noop(self):
+        self.start_beta()
+        plan = self.stage(channel="beta")
+        updates.commit_update(self.repository, plan)
+        self.assertEqual(self.origin_head("beta"), self.head())
+        self.assertEqual(self.origin_head("main"), self.initial_head)
+        git(self.repository, "tag", "v1.1.0-beta.2")
+        self.responses[BETA_RELEASE_ENDPOINT].append({"tag_name": "v1.1.0-beta.2", "draft": False, "prerelease": True})
+        next_plan = self.stage(revision=None, channel="beta")
+        self.assertFalse(next_plan["release_required"])
+        before = self.head()
+        updates.commit_update(self.repository, next_plan)
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.origin_head("main"), self.initial_head)
+
+    def test_beta_unpublished_pin_creates_retry_commit_only_on_beta(self):
+        self.start_beta()
+        self.pin_candidate(branch="beta")
+        before = self.head()
+        plan = self.stage(revision=None, channel="beta")
+        updates.commit_update(self.repository, plan)
+        self.assertNotEqual(self.head(), before)
+        self.assertEqual(git(self.repository, "diff", "HEAD^", "HEAD", "--name-only"), "")
+        self.assertEqual(self.origin_head("beta"), self.head())
+        self.assertEqual(self.origin_head("main"), self.initial_head)
+
+    def test_beta_commit_checks_beta_races_even_when_engine_is_unchanged(self):
+        self.start_beta()
+        plan = self.stage(revision=None, channel="beta")
+        self.assertFalse(plan["release_required"])
+        other = self.directory / "concurrent-beta"
+        git(self.directory, "clone", "-q", "--branch", "beta", str(self.origin), str(other))
+        git(other, "-c", "user.name=Other Fixture", "-c", "user.email=other@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fix: concurrent beta work")
+        git(other, "push", "-q", "origin", "beta")
+        concurrent = git(other, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(RuntimeError, "beta advanced"):
+            updates.commit_update(self.repository, plan)
+        self.assertEqual(self.head(), self.initial_head)
+        self.assertEqual(self.origin_head("beta"), concurrent)
+        self.assertEqual(self.origin_head("main"), self.initial_head)
+
+    def test_beta_commit_ignores_an_independent_main_advance(self):
+        self.start_beta()
+        plan = self.stage(channel="beta")
+        other = self.directory / "concurrent-main"
+        git(self.directory, "clone", "-q", str(self.origin), str(other))
+        git(other, "-c", "user.name=Other Fixture", "-c", "user.email=other@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fix: concurrent stable work")
+        git(other, "push", "-q", "origin", "main")
+        concurrent = git(other, "rev-parse", "HEAD")
+        updates.commit_update(self.repository, plan)
+        self.assertEqual(self.origin_head("beta"), self.head())
+        self.assertEqual(self.origin_head("main"), concurrent)
+
+    def test_mismatched_plan_channel_and_branch_cannot_push_to_other_channel(self):
+        plan = self.stage()
+        for change in ({"channel": "beta"}, {"release_branch": "beta"}, {"channel": "other"}, {"channel": []}):
+            with self.subTest(change=change):
+                self.assert_rejected_without_changes(lambda: updates.commit_update(self.repository, plan | change))
+
+    def test_commit_refuses_to_push_a_plan_from_the_wrong_local_branch(self):
+        plan = self.stage()
+        git(self.repository, "switch", "-qc", "feature/test")
+        self.assert_rejected_without_changes(lambda: updates.commit_update(self.repository, plan))
 
 
 if __name__ == "__main__":

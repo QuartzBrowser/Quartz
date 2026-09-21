@@ -6,7 +6,6 @@ exercise the actual orchestration script and guard legacy bootstrap routing.
 """
 
 import hashlib
-import json
 import os
 from pathlib import Path
 import plistlib
